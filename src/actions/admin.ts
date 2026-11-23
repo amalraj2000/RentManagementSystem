@@ -8,9 +8,9 @@ import { EXPENSE_CATEGORIES } from "@/lib/categories";
 import { formatINR } from "@/lib/money";
 import { requireAdmin } from "@/lib/session";
 import * as S from "@/lib/schemas";
-import { addInvoiceItem, deleteInvoice, recordPayment, syncInvoices, updatePaymentDetails, voidPayment } from "@/services/billing";
+import { addInvoiceItem, deleteInvoice, markPaid, recordPayment, syncInvoices, updatePaymentDetails, voidPayment } from "@/services/billing";
 import { addExpense, deleteAnnouncement, deleteExpense, postAnnouncement, updateAnnouncement, updateExpense, updateSettings } from "@/services/misc";
-import { createTenant, deleteTenant, vacateTenant, moveTenantToBed, resetTenantPassword, setTenantLoginActive, updateTenant } from "@/services/tenants";
+import { createTenant, deleteTenant, revertVacate, vacateTenant, moveTenantToBed, resetTenantPassword, setTenantLoginActive, updateTenant } from "@/services/tenants";
 import { createAdminUser, deleteAdminUser, resetAdminPassword, setAdminActive, updateAdminUser } from "@/services/admins";
 import { createRoom, deleteRoom, updateRoom } from "@/services/rooms";
 import { approveClaim, rejectClaim } from "@/services/claims";
@@ -122,6 +122,16 @@ export async function vacateAction(tenantId: string, f: FormData) {
   });
 }
 
+export async function revertVacateAction(tenantId: string) {
+  return run(async () => {
+    const me = await requireAdmin();
+    const r = await revertVacate(getDb(), me.id, S.id.parse(tenantId));
+    revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
+    return r.bedBack ? "Vacate undone. Their old bed is back with them." : "Vacate undone. Their old bed is taken, so assign a bed on their page.";
+  });
+}
+
 export async function toggleLoginAction(tenantId: string, active: boolean) {
   return run(async () => {
     const me = await requireAdmin();
@@ -176,6 +186,18 @@ export async function recordPaymentAction(f: FormData) {
     const r = await recordPayment(getDb(), me.id, { invoiceId: d.invoiceId, purpose: d.purpose, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
     revalidatePath("/admin", "layout");
     return `Payment recorded · receipt ${r.receiptNo}`;
+  });
+}
+
+/** "This has been paid": records the whole remaining rent (`target` = "rent") or ONE expense line (`target` = its id) as paid today. */
+export async function markPaidAction(invoiceId: string, target: string, f: FormData) {
+  return run(async () => {
+    const me = await requireAdmin();
+    const d = z.object({ method: z.enum(["upi", "cash"]) }).parse(fd(f));
+    const r = await markPaid(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), itemId: target === "rent" ? null : S.id.parse(target), method: d.method });
+    revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
+    return `Marked as paid · receipt ${r.receiptNo}`;
   });
 }
 

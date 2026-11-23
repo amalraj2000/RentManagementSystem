@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { bedAssignments, beds, invoices, payments, rooms, tenantDocuments, tenantProfiles, users } from "@/db/schema";
 import { hashPassword, passwordProblem, destroyUserSessions } from "@/lib/auth-core";
@@ -71,11 +71,12 @@ export async function createTenant(db: DB, actorId: string, input: TenantInput &
 }
 
 export async function updateTenant(db: DB, actorId: string, tenantId: string, input: TenantInput & { status: "active" | "notice" | "moved_out" }) {
-  if (input.status === "moved_out") throw new AppError("Use the Vacate action to vacate a tenant");
   await db.transaction(async (tx) => {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
-    if (p.status === "moved_out") throw new AppError("This tenant has vacated");
+    // A vacated tenant's details can still be corrected, but they stay vacated; nobody is vacated through this form.
+    if (input.status === "moved_out" && p.status !== "moved_out") throw new AppError("Use the Vacate action to vacate a tenant");
+    if (p.status === "moved_out") input = { ...input, status: "moved_out" };
     const email = input.email.trim().toLowerCase();
     const [dupe] = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
     if (dupe && dupe.id !== p.userId) throw new AppError("A user with this email already exists", "email");
@@ -126,6 +127,32 @@ export async function vacateTenant(db: DB, actorId: string, tenantId: string, da
     await audit(tx, actorId, "tenant.move_out", "tenant", tenantId, { date });
     await notifyTenant(tx, tenantId, { type: "vacated", title: "Your stay has ended", body: `You are marked as vacated on ${formatDate(date)}. Your invoices and receipts stay available here.`, href: "/portal/rent" });
     await notifyAdmins(tx, { type: "vacated", title: "A tenant has vacated", body: `Vacate date ${formatDate(date)}.`, href: `/admin/tenants/${tenantId}` }, actorId);
+  });
+}
+
+/**
+ * Undoes a vacate (e.g. it was marked by mistake): the tenant is active again and billing resumes.
+ * Their old bed is given back if nobody else has it now; otherwise they have no bed until you assign one.
+ */
+export async function revertVacate(db: DB, actorId: string, tenantId: string) {
+  return db.transaction(async (tx) => {
+    const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
+    if (!p) throw new AppError("Tenant not found");
+    if (p.status !== "moved_out") throw new AppError("This tenant has not vacated");
+    await tx.update(tenantProfiles).set({ status: "active", moveOutDate: null }).where(eq(tenantProfiles.id, tenantId));
+    // give the last bed back when it is still free
+    const [last] = await tx.select().from(bedAssignments).where(eq(bedAssignments.tenantId, tenantId)).orderBy(desc(bedAssignments.startDate), desc(bedAssignments.createdAt)).limit(1);
+    let bedBack = false;
+    if (last && last.endDate && last.endDate === p.moveOutDate) {
+      const [taken] = await tx.select({ id: bedAssignments.id }).from(bedAssignments).where(and(eq(bedAssignments.bedId, last.bedId), isNull(bedAssignments.endDate))).limit(1);
+      if (!taken) {
+        await tx.update(bedAssignments).set({ endDate: null }).where(eq(bedAssignments.id, last.id));
+        bedBack = true;
+      }
+    }
+    await audit(tx, actorId, "tenant.revert_vacate", "tenant", tenantId, { bedBack });
+    await notifyTenant(tx, tenantId, { type: "status_active", title: "Your stay is active again", body: "The PG owner has reopened your stay.", href: "/portal" });
+    return { bedBack };
   });
 }
 

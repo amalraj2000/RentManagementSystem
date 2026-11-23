@@ -9,7 +9,7 @@ import { ImpersonateButton } from "@/components/impersonate-button";
 import { ConfirmButton } from "@/components/action-form";
 import { Badge, buttonClass, EditLink, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
 import { offsetFor, PAGE_SIZE, pageParam } from "@/lib/page";
-import { deleteTenantAction } from "@/actions/admin";
+import { deleteTenantAction, revertVacateAction } from "@/actions/admin";
 import { formatDate } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 
@@ -51,6 +51,7 @@ export default async function Tenants({ searchParams }: { searchParams: Promise<
                   <RowActions>
                     <ImpersonateButton tenantId={r.id} name={r.name} />
                     {r.status !== "moved_out" && <ShareLoginButton tenantId={r.id} name={r.name} />}
+                    {r.status === "moved_out" && <ConfirmButton label="Undo vacate" variant="secondary" title={`Undo vacate for ${r.name}?`} body="They become an active tenant again and billing resumes. Their old bed is given back if it is still free." action={revertVacateAction.bind(null, r.id)} confirmLabel="Undo vacate" />}
                     <EditLink href={`/admin/tenants/${r.id}`} />
                     <ConfirmButton label="Delete" title={`Delete ${r.name}?`} body="Only possible if they have no invoices or payments. Otherwise use Vacate on their page — history is preserved." action={deleteTenantAction.bind(null, r.id)} confirmLabel="Delete" />
                   </RowActions>

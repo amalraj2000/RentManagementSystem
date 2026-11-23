@@ -4,7 +4,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { ActionForm, ConfirmButton } from "@/components/action-form";
 import { TenantFields } from "@/components/tenant-fields";
 import { Badge, Card, Empty, Field, Input, PageHeader, Select, Table, Td, Th } from "@/components/ui";
-import { deleteTenantAction, moveBedAction, vacateAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
+import { deleteTenantAction, moveBedAction, revertVacateAction, vacateAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { bedAssignments, beds, invoices, rooms, tenantProfiles, users } from "@/db/schema";
 import { invoiceStatus } from "@/lib/billing";
@@ -62,20 +62,15 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
         <div className="space-y-4">
           <Card className="p-5">
             <h2 className="mb-3 text-sm font-semibold">Details</h2>
-            {movedOut ? (
-              <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <div><dt className="text-muted">Email</dt><dd>{row.email}</dd></div>
-                <div><dt className="text-muted">Phone</dt><dd>{p.phone}</dd></div>
-                <div><dt className="text-muted">Joined</dt><dd>{formatDate(p.joiningDate)}</dd></div>
-                <div><dt className="text-muted">Vacated</dt><dd>{formatDate(p.moveOutDate)}</dd></div>
-                <div><dt className="text-muted">Rent</dt><dd>{formatINR(p.monthlyRentPaise)}</dd></div>
-                <div><dt className="text-muted">Deposit</dt><dd>{formatINR(p.securityDepositPaise)}</dd></div>
-              </dl>
-            ) : (
+            {movedOut && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 p-2.5 text-xs text-slate-600">
+                <span>Vacated {formatDate(p.moveOutDate)}. You can still correct their details.</span>
+                <ConfirmButton label="Undo vacate" variant="secondary" title="Undo vacate?" body="They become an active tenant again and billing resumes. Their old bed is given back if it is still free." action={revertVacateAction.bind(null, id)} confirmLabel="Undo vacate" />
+              </div>
+            )}
               <ActionForm action={update} reset={false}>
                 <TenantFields t={{ ...p, name: row.name, email: row.email }} />
               </ActionForm>
-            )}
           </Card>
           <DocumentsCard tenantId={id} name={row.name} docs={docs} />
           <div>

@@ -1183,3 +1183,65 @@ describe("each expense is paid on its own", () => {
     expect((await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0]).toMatchObject({ rentPaidPaise: 0, expensePaidPaise: gas.balance });
   });
 });
+
+describe("vacated tenants", () => {
+  it("can still have their details corrected, but stay vacated and can't be vacated through the edit form", async () => {
+    const { updateTenant } = await import("@/services/tenants");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const t = await addTenant(d, adm, { name: "Left Tenant", joining: "2026-01-01" });
+    const live = await addTenant(d, adm, { name: "Still Here", joining: "2026-01-01" });
+    const base = { name: "Left Tenant Fixed", email: "left.fixed@example.test", phone: "9111111111", joiningDate: "2026-01-01", monthlyRentPaise: 120000, securityDepositPaise: 50000 };
+    await expect(updateTenant(d, adm, live, { ...base, email: "x@example.test", status: "moved_out" })).rejects.toThrow(/Vacate action/);
+    await vacateTenant(d, adm, t, "2026-02-10");
+    await updateTenant(d, adm, t, { ...base, status: "moved_out" });
+    const [p] = await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t));
+    expect(p).toMatchObject({ status: "moved_out", phone: "9111111111", monthlyRentPaise: 120000, moveOutDate: "2026-02-10" });
+    expect((await d.select().from(users).where(eq(users.id, p.userId)))[0]).toMatchObject({ name: "Left Tenant Fixed", email: "left.fixed@example.test" });
+    // even if the form says "active", a vacated tenant is not brought back
+    await updateTenant(d, adm, t, { ...base, status: "active" });
+    expect((await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0].status).toBe("moved_out");
+  });
+});
+
+describe("undo vacate and mark paid", () => {
+  it("undoing a vacate reactivates the tenant and returns the old bed when it is free", async () => {
+    const { revertVacate } = await import("@/services/tenants");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const beds = await allBeds(d);
+    const a = await addTenant(d, adm, { name: "Undo A", bedId: beds[0].id, joining: "2026-01-01" });
+    await expect(revertVacate(d, adm, a)).rejects.toThrow(/not vacated/);
+    await vacateTenant(d, adm, a, "2026-02-10");
+    expect(await revertVacate(d, adm, a)).toEqual({ bedBack: true });
+    expect((await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, a)))[0]).toMatchObject({ status: "active", moveOutDate: null });
+    expect((await d.select().from(bedAssignments).where(and(eq(bedAssignments.tenantId, a), isNull(bedAssignments.endDate)))).length).toBe(1);
+    // if someone else took the bed meanwhile, the tenant comes back without a bed
+    await vacateTenant(d, adm, a, "2026-03-01");
+    await addTenant(d, adm, { name: "Took the bed", bedId: beds[0].id, joining: "2026-03-02" });
+    expect(await revertVacate(d, adm, a)).toEqual({ bedBack: false });
+  });
+
+  it("mark paid settles only the rent, or only one expense line", async () => {
+    const { markPaid } = await import("@/services/billing");
+    const { mySharedItems } = await import("@/services/portal");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const t = await addTenant(d, adm, { name: "Mark Paid", rent: 100000 });
+    const userId = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0].userId;
+    await addExpense(d, adm, { category: "water", amountPaise: 30000, spentOn: "2026-03-05", description: "", share: { mode: "equal" } });
+    await addExpense(d, adm, { category: "cooking_gas", amountPaise: 20000, spentOn: "2026-03-06", description: "", share: { mode: "equal" } });
+    const inv = (await d.select().from(invoices).where(eq(invoices.tenantId, t)))[0];
+    const water = (await mySharedItems(d, userId)).find((l) => l.category === "water")!;
+    await markPaid(d, adm, { invoiceId: inv.id, itemId: water.itemId, method: "cash" });
+    let now = await mySharedItems(d, userId);
+    expect(now.find((l) => l.category === "water")).toMatchObject({ status: "paid" });
+    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "unpaid" });
+    await expect(markPaid(d, adm, { invoiceId: inv.id, itemId: water.itemId, method: "cash" })).rejects.toThrow(/already paid/);
+    await markPaid(d, adm, { invoiceId: inv.id, method: "upi" });
+    expect((await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0]).toMatchObject({ rentPaidPaise: 100000, expensePaidPaise: 30000 });
+    now = await mySharedItems(d, userId);
+    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "unpaid" });
+    await expect(markPaid(d, adm, { invoiceId: inv.id, method: "upi" })).rejects.toThrow(/already paid/);
+  });
+});

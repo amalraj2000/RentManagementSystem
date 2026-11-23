@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, isNull, lte, or, gte, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { bedAssignments, expenseAllocations, expenses, invoiceItems, invoices, payments, rentSettings, tenantProfiles, users, utilityAllocations, utilityBills } from "@/db/schema";
-import { dueDateFor, formatDate, monthEnd, monthLabel, monthStart } from "@/lib/dates";
+import { dueDateFor, formatDate, monthEnd, monthLabel, monthStart, todayISO } from "@/lib/dates";
 import { AppError, audit, recomputeInvoice, type Q } from "./common";
 import { purposeLabel, splitRentExpense, type Purpose } from "@/lib/billing";
 import { notifyAdmins, notifyTenant, tenantName } from "./notifications";
@@ -322,4 +322,26 @@ export async function openBills(db: DB) {
       return { id: r.id, name: r.name, month: r.month, rentBalance: s.rentBalance, expenseBalance: s.expenseBalance };
     })
     .filter((r) => r.rentBalance > 0 || r.expenseBalance > 0);
+}
+
+
+/**
+ * Admin shortcut: "this has been paid" — records the FULL remaining amount of ONE thing as paid today:
+ * the month's rent (`itemId` empty) or ONE expense line (`itemId` given). Nothing else on the bill is touched.
+ */
+export async function markPaid(db: DB, actorId: string, p: { invoiceId: string; itemId?: string | null; method: "cash" | "upi"; today?: string }) {
+  const today = p.today ?? todayISO();
+  return db.transaction(async (tx) => {
+    const [inv] = await tx.select().from(invoices).where(eq(invoices.id, p.invoiceId));
+    if (!inv || inv.cancelledAt) throw new AppError("Bill not found");
+    if (p.itemId) {
+      const line = (await expenseLinesFor(tx, [inv.id])).get(inv.id)?.get(p.itemId);
+      if (!line) throw new AppError("That expense is not on this bill");
+      if (line.balance <= 0) throw new AppError("That expense is already paid");
+      return recordPaymentTx(tx, actorId, { invoiceId: inv.id, purpose: "expense", invoiceItemId: p.itemId, amountPaise: line.balance, paidOn: today, method: p.method, note: "Marked as paid by the owner" });
+    }
+    const b = await invoiceBuckets(tx, inv.id);
+    if (b.rentBalance <= 0) throw new AppError("The rent is already paid");
+    return recordPaymentTx(tx, actorId, { invoiceId: inv.id, purpose: "rent", amountPaise: b.rentBalance, paidOn: today, method: p.method, note: "Marked as paid by the owner" });
+  });
 }

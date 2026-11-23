@@ -112,6 +112,37 @@ export async function expenseByCategory(db: DB, month: string) {
   return out;
 }
 
+/** This month's unpaid bills, per tenant: the rent still due and each expense line still due. Feeds the dashboard "mark as paid" list. */
+export async function unpaidThisMonth(db: DB, month: string) {
+  const invs = await db
+    .select({ id: invoices.id, tenantId: invoices.tenantId, name: users.name, rentPaid: invoices.rentPaidPaise, expensePaid: invoices.expensePaidPaise })
+    .from(invoices)
+    .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
+    .innerJoin(users, eq(users.id, tenantProfiles.userId))
+    .where(and(eq(invoices.periodMonth, month), isNull(invoices.cancelledAt)))
+    .orderBy(asc(users.name));
+  if (!invs.length) return [];
+  const ids = invs.map((i) => i.id);
+  const items = await db
+    .select({ id: invoiceItems.id, invoiceId: invoiceItems.invoiceId, kind: invoiceItems.kind, amountPaise: invoiceItems.amountPaise, category: expenses.category })
+    .from(invoiceItems)
+    .leftJoin(expenses, eq(expenses.id, invoiceItems.expenseId))
+    .where(inArray(invoiceItems.invoiceId, ids));
+  const lines = await expenseLinesFor(db, ids);
+  const out = [];
+  for (const inv of invs) {
+    const its = items.filter((i) => i.invoiceId === inv.id);
+    const sum = (f: (i: (typeof its)[number]) => boolean) => its.filter(f).reduce((a, i) => a + i.amountPaise, 0);
+    const split = splitRentExpense({ rent: sum((i) => i.kind === "rent"), other: sum((i) => i.kind !== "rent" && i.kind !== "adjustment"), adjustment: sum((i) => i.kind === "adjustment") }, { rent: inv.rentPaid, expense: inv.expensePaid });
+    const due = its
+      .map((i) => ({ i, l: lines.get(inv.id)?.get(i.id) }))
+      .filter((x) => x.l && x.l.balance > 0)
+      .map((x) => ({ itemId: x.i.id, category: x.i.category ?? (x.i.kind === "electricity" || x.i.kind === "water" ? x.i.kind : "other"), balance: x.l!.balance }));
+    if (split.rentBalance > 0 || due.length) out.push({ invoiceId: inv.id, tenantId: inv.tenantId, name: inv.name, rentBalance: split.rentBalance, lines: due });
+  }
+  return out;
+}
+
 export async function outstandingByTenant(db: DB) {
   const rows = await db
     .select({

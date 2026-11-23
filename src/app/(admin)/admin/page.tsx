@@ -4,8 +4,12 @@ import { getDb } from "@/db/client";
 import { Badge, buttonClass, Card, Empty, PageHeader, Stat } from "@/components/ui";
 import { currentMonth, formatDate, monthLabel, todayISO, addMonths } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
-import { dashboardData, expenseByCategory, monthlySummary } from "@/services/reports";
+import { dashboardData, expenseByCategory, monthlySummary, unpaidThisMonth } from "@/services/reports";
 import { invoiceStatus } from "@/lib/billing";
+import { ConfirmButton } from "@/components/action-form";
+import { ChoiceChips, METHOD_CHOICES } from "@/components/choice-chips";
+import { categoryLabel } from "@/lib/categories";
+import { markPaidAction } from "@/actions/admin";
 
 export const metadata = { title: "Dashboard" };
 
@@ -13,7 +17,18 @@ export default async function Dashboard() {
   const db = getDb();
   const month = currentMonth();
   const today = todayISO();
-  const [d, summary, byCat] = await Promise.all([dashboardData(db, month, today), monthlySummary(db, addMonths(month, -5), month), expenseByCategory(db, month)]);
+  const [d, summary, byCat, unpaid] = await Promise.all([dashboardData(db, month, today), monthlySummary(db, addMonths(month, -5), month), expenseByCategory(db, month), unpaidThisMonth(db, month)]);
+  const markPaid = (invoiceId: string, target: string, what: string, name: string, amount: number) => (
+    <ConfirmButton
+      label="Mark paid"
+      variant="primary"
+      title={`Mark ${what} as paid?`}
+      body={`${name} · ${formatINR(amount)}. This records the full amount as received today.`}
+      confirmLabel="Mark paid"
+      action={markPaidAction.bind(null, invoiceId, target)}
+      extra={<div className="mt-3"><span className="mb-1.5 block text-sm font-medium">How was it paid?</span><ChoiceChips name="method" label="How was it paid" options={METHOD_CHOICES} defaultValue="upi" /></div>}
+    />
+  );
   const cats = [["electricity", "Electricity"], ["water", "Water"], ["cooking_gas", "Gas cylinder"], ...(byCat.other.billed ? [["other", "Other"]] : [])] as const;
   const max = Math.max(1, ...summary.flatMap((m) => [m.collected.total, m.expenses]));
   return (
@@ -69,6 +84,35 @@ export default async function Dashboard() {
           })}
         </div>
       </section>
+      {unpaid.length > 0 && (
+        <section aria-labelledby="unpaid-h" className="mt-6">
+          <h2 id="unpaid-h" className="mb-1 text-sm font-semibold">Unpaid this month</h2>
+          <p className="mb-2 text-xs text-muted">Tenant already paid you? Tap <strong>Mark paid</strong>. Rent and each expense are marked separately.</p>
+          <Card>
+            <ul className="divide-y divide-line">
+              {unpaid.map((u) => (
+                <li key={u.invoiceId} className="px-4 py-3">
+                  <Link href={`/admin/tenants/${u.tenantId}`} className="text-sm font-semibold hover:underline">{u.name}</Link>
+                  <ul className="mt-1.5 space-y-1.5">
+                    {u.rentBalance > 0 && (
+                      <li className="flex items-center justify-between gap-3 text-sm">
+                        <span>Rent <span className="tabular-nums text-muted">· {formatINR(u.rentBalance)}</span></span>
+                        {markPaid(u.invoiceId, "rent", "rent", u.name, u.rentBalance)}
+                      </li>
+                    )}
+                    {u.lines.map((l) => (
+                      <li key={l.itemId} className="flex items-center justify-between gap-3 text-sm">
+                        <span>{categoryLabel(l.category)} <span className="tabular-nums text-muted">· {formatINR(l.balance)}</span></span>
+                        {markPaid(u.invoiceId, l.itemId, categoryLabel(l.category).toLowerCase(), u.name, l.balance)}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </section>
+      )}
       {d.outstandingTotal > d.split.rentPending + d.split.expensePending && (
         <p className="mt-3 text-xs text-muted">Unpaid from earlier months: {formatINR(d.outstandingTotal - d.split.rentPending - d.split.expensePending)} (see “Outstanding balances” below).</p>
       )}

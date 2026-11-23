@@ -14,7 +14,8 @@ export function TenantFields({ t, defaultRentPaise }: { t?: T; defaultRentPaise?
       <Field label="Security deposit (₹)"><Input name="deposit" inputMode="decimal" required defaultValue={paiseToInput(t?.securityDepositPaise ?? 0)} /></Field>
       <Field label="Emergency contact name"><Input name="emergencyContactName" maxLength={100} defaultValue={t?.emergencyContactName ?? ""} /></Field>
       <Field label="Emergency contact number"><Input name="emergencyContactPhone" type="tel" defaultValue={t?.emergencyContactPhone ?? ""} /></Field>
-      {t?.status && (
+      {t?.status === "moved_out" && <input type="hidden" name="status" value="moved_out" />}
+      {t?.status && t.status !== "moved_out" && (
         <Field label="Status">
           <Select name="status" defaultValue={t.status}>
             <option value="active">Active</option>
