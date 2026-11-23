@@ -203,7 +203,7 @@ export function Pager({ page, hasMore, total, basePath, params = {} }: { page: n
 
 /** Edit link + optional delete slot for table rows. */
 export function RowActions({ children }: { children: ReactNode }) {
-  return <div className="flex items-center justify-end gap-1.5">{children}</div>;
+  return <div className="ml-auto flex max-w-[8.5rem] flex-wrap items-center justify-end gap-1.5 sm:max-w-[13rem] md:max-w-[8.5rem] xl:max-w-none">{children}</div>;
 }
 const iconBtn = "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border transition-colors";
 export const iconButtonClass = (tone: "neutral" | "danger" | "primary" = "neutral") =>

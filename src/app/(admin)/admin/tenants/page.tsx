@@ -11,7 +11,11 @@ import { Badge, buttonClass, EditLink, Empty, PageHeader, Pager, RowActions, Tab
 import { offsetFor, PAGE_SIZE, pageParam } from "@/lib/page";
 import { deleteTenantAction, revertVacateAction } from "@/actions/admin";
 import { MarkPaidButton } from "@/components/mark-paid-button";
-import { unpaidItemsByTenant } from "@/services/reports";
+import { paymentsByTenant, unpaidItemsByTenant } from "@/services/reports";
+import { PopupButton } from "@/components/paid-list-button";
+import { ReceiptText } from "lucide-react";
+import { methodLabel } from "@/lib/payment-methods";
+import { monthLabel } from "@/lib/dates";
 import { AddTenantButton } from "@/components/add-tenant-button";
 import { activeTenantCount } from "@/services/tenants";
 import { formatDate } from "@/lib/dates";
@@ -35,7 +39,7 @@ export default async function Tenants({ searchParams }: { searchParams: Promise<
     .orderBy(asc(tenantProfiles.status), desc(tenantProfiles.createdAt))
     .limit(PAGE_SIZE)
     .offset(offsetFor(page));
-  const [unpaid, active] = await Promise.all([unpaidItemsByTenant(getDb(), rows.map((r) => r.id)), activeTenantCount(getDb())]);
+  const [unpaid, active, paid] = await Promise.all([unpaidItemsByTenant(getDb(), rows.map((r) => r.id)), activeTenantCount(getDb()), paymentsByTenant(getDb(), rows.map((r) => r.id))]);
   const [{ total }] = await getDb().select({ total: sql<number>`count(*)` }).from(tenantProfiles);
   return (
     <>
@@ -54,6 +58,35 @@ export default async function Tenants({ searchParams }: { searchParams: Promise<
                 <Td><Badge kind={r.status} /></Td>
                 <Td>
                   <RowActions>
+                    {(() => {
+                      const list = paid.get(r.id) ?? [];
+                      // rent and expenses are added up separately — never together
+                      const rentTotal = list.filter((p) => p.purpose === "rent").reduce((a, p) => a + p.amount, 0);
+                      const expTotal = list.filter((p) => p.purpose === "expense").reduce((a, p) => a + p.amount, 0);
+                      return (
+                        <PopupButton icon={<ReceiptText className="size-4" aria-hidden />} label="Paid list" title={`${r.name} · payments`}>
+                          {list.length === 0 ? <p className="px-5 py-8 text-center text-muted">No payments yet.</p> : (
+                            <>
+                              <div className="grid grid-cols-2 gap-3 border-b border-line px-5 py-3">
+                                <div><p className="text-xs text-muted">Rent paid</p><p className="font-semibold tabular-nums">{formatINR(rentTotal)}</p></div>
+                                <div><p className="text-xs text-muted">Expenses paid</p><p className="font-semibold tabular-nums">{formatINR(expTotal)}</p></div>
+                              </div>
+                              <ul className="divide-y divide-line">
+                                {list.map((p) => (
+                                  <li key={p.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+                                    <div className="min-w-0">
+                                      <p className="font-medium">{p.what} <span className="font-normal text-muted">· {monthLabel(p.month)}</span></p>
+                                      <p className="text-xs text-muted">{formatDate(p.paidOn)} · {methodLabel(p.method)} · <a href={`/receipt/${p.id}`} target="_blank" rel="noopener" className="text-accent hover:underline">Receipt</a></p>
+                                    </div>
+                                    <span className="shrink-0 font-medium tabular-nums">{formatINR(p.amount)}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </>
+                          )}
+                        </PopupButton>
+                      );
+                    })()}
                     <MarkPaidButton iconOnly name={r.name} items={unpaid.get(r.id) ?? []} />
                     <ImpersonateButton tenantId={r.id} name={r.name} />
                     {r.status !== "moved_out" && <ShareLoginButton tenantId={r.id} name={r.name} />}

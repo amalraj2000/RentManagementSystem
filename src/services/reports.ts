@@ -185,6 +185,30 @@ export async function unpaidItemsByTenant(db: DB, tenantIds: string[]) {
   return out;
 }
 
+/** Each tenant's payments (newest first, voided ones left out), so the Tenants list can show "who paid what". Rent and expenses stay apart. */
+export async function paymentsByTenant(db: DB, tenantIds: string[], perTenant = 30) {
+  const out = new Map<string, { id: string; paidOn: string; amount: number; method: string; purpose: "rent" | "expense"; month: string; what: string; receiptNo: string }[]>();
+  if (!tenantIds.length) return out;
+  const rows = await db
+    .select({ id: payments.id, tenantId: payments.tenantId, paidOn: payments.paidOn, amount: payments.amountPaise, method: payments.method, purpose: payments.purpose, itemId: payments.invoiceItemId, receiptNo: payments.receiptNo, month: invoices.periodMonth })
+    .from(payments)
+    .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
+    .where(and(inArray(payments.tenantId, tenantIds), isNull(payments.voidedAt)))
+    .orderBy(desc(payments.paidOn), desc(payments.createdAt));
+  const itemIds = [...new Set(rows.flatMap((r) => (r.itemId ? [r.itemId] : [])))];
+  const items = itemIds.length
+    ? await db.select({ id: invoiceItems.id, kind: invoiceItems.kind, category: expenses.category }).from(invoiceItems).leftJoin(expenses, eq(expenses.id, invoiceItems.expenseId)).where(inArray(invoiceItems.id, itemIds))
+    : [];
+  const labelOf = new Map(items.map((i) => [i.id, categoryLabel(i.category ?? (i.kind === "electricity" || i.kind === "water" ? i.kind : "other"))]));
+  for (const r of rows) {
+    const list = out.get(r.tenantId) ?? [];
+    if (list.length >= perTenant) continue;
+    list.push({ id: r.id, paidOn: r.paidOn, amount: r.amount, method: r.method, purpose: r.purpose, month: r.month, what: r.purpose === "rent" ? "Rent" : (r.itemId && labelOf.get(r.itemId)) || "Expenses", receiptNo: r.receiptNo });
+    out.set(r.tenantId, list);
+  }
+  return out;
+}
+
 /** Who still owes — with the RENT they owe and the EXPENSES they owe kept apart. */
 export async function outstandingByTenant(db: DB) {
   const all = await invoiceSplits(db);

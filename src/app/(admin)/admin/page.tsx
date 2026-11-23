@@ -7,6 +7,7 @@ import { formatINR } from "@/lib/money";
 import { expenseByCategory, rentVsExpenses } from "@/services/reports";
 import { AddTenantButton } from "@/components/add-tenant-button";
 import { activeTenantCount } from "@/services/tenants";
+import { pendingClaimCount } from "@/services/claims";
 
 export const metadata = { title: "Dashboard" };
 
@@ -14,7 +15,7 @@ export const metadata = { title: "Dashboard" };
 export default async function Dashboard() {
   const db = getDb();
   const month = currentMonth();
-  const [split, byCat, active] = await Promise.all([rentVsExpenses(db, month), expenseByCategory(db, month), activeTenantCount(db)]);
+  const [split, byCat, active, waiting] = await Promise.all([rentVsExpenses(db, month), expenseByCategory(db, month), activeTenantCount(db), pendingClaimCount(db)]);
   const cats = [["electricity", "Electricity"], ["water", "Water"], ["cooking_gas", "Gas cylinder"], ...(byCat.other.billed ? [["other", "Other"]] : [])] as const;
   return (
     <>
@@ -30,6 +31,13 @@ export default async function Dashboard() {
         }
       />
 
+      {/* the Payments menu is gone, so payment reports from tenants are pointed out here */}
+      {waiting > 0 && (
+        <Link href="/admin/payments?show=waiting" className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 hover:bg-amber-100">
+          <span><strong>{waiting}</strong> payment report{waiting > 1 ? "s" : ""} from tenants waiting for you to confirm</span>
+          <span className="font-medium underline">Review</span>
+        </Link>
+      )}
       <section aria-labelledby="rent-h">
         <h2 id="rent-h" className="mb-2 text-sm font-semibold">Rent · {monthLabel(month)}</h2>
         <div className="grid gap-3 sm:grid-cols-3">
