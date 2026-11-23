@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useSyncExternalStore, useTransition, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, useTransition, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Ban, Check, Loader2, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -35,6 +35,8 @@ export function ActionForm({
   const router = useRouter();
   const ref = useRef<HTMLFormElement>(null);
   const [pending, start] = useTransition();
+  // Inside a pop-up (native <dialog>, e.g. the login box) a toast would hide BEHIND it, so the message is shown in the pop-up instead.
+  const [popupError, setPopupError] = useState<string | null>(null);
   useEffect(() => (ref.current ? attachLiveValidation(ref.current) : undefined), []);
   return (
     <form
@@ -50,6 +52,8 @@ export function ActionForm({
           return;
         }
         const data = new FormData(form);
+        const inPopup = !!form.closest("dialog");
+        setPopupError(null);
         start(async () => {
           const r = await action(data);
           if (r.ok) {
@@ -70,11 +74,13 @@ export function ActionForm({
             }
           }
           if (first) first.focus();
+          else if (inPopup) setPopupError(r.error);
           else toast.error(r.error);
         });
       }}
     >
       {children}
+      {popupError && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{popupError}</p>}
       <Button type="submit" variant={variant} disabled={pending} className="mt-4">
         {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
         {submit}
