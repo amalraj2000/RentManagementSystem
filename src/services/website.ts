@@ -3,6 +3,7 @@ import type { DB } from "@/db/client";
 import { rentSettings, sitePhotos } from "@/db/schema";
 import { AppError, audit } from "./common";
 import type { ValidFile } from "./documents";
+import { FACILITY_KEYS, parseHidden } from "@/lib/facilities";
 
 export const MAX_SITE_PHOTOS = 12;
 
@@ -16,6 +17,19 @@ export async function getWebsiteInfo(db: DB): Promise<WebsiteInfo> {
     .from(rentSettings)
     .where(eq(rentSettings.id, 1));
   return s ?? DEFAULT_WEBSITE;
+}
+
+/** Facilities the owner has switched off. */
+export async function getHiddenFacilities(db: DB): Promise<string[]> {
+  const [s] = await db.select({ h: rentSettings.hiddenFacilities }).from(rentSettings).where(eq(rentSettings.id, 1));
+  return parseHidden(s?.h);
+}
+
+/** `on` = the facilities that should be shown; everything else is hidden. */
+export async function setFacilities(db: DB, actorId: string, on: string[]) {
+  const hidden = FACILITY_KEYS.filter((k) => !on.includes(k));
+  await db.update(rentSettings).set({ hiddenFacilities: JSON.stringify(hidden) }).where(eq(rentSettings.id, 1));
+  await audit(db, actorId, "website.facilities", "settings", "1", { hidden });
 }
 
 export async function updateWebsiteInfo(db: DB, actorId: string, w: WebsiteInfo) {

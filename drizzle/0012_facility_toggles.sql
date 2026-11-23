@@ -1,0 +1,1 @@
+ALTER TABLE `rent_settings` ADD `hidden_facilities` text DEFAULT '[]' NOT NULL;

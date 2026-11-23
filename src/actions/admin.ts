@@ -15,7 +15,7 @@ import { createAdminUser, deleteAdminUser, resetAdminPassword, setAdminActive, u
 import { createRoom, deleteRoom, updateRoom } from "@/services/rooms";
 import { approveClaim, rejectClaim } from "@/services/claims";
 import { collectDues } from "@/services/collect";
-import { addSitePhoto, deleteSitePhoto, updateWebsiteInfo } from "@/services/website";
+import { addSitePhoto, deleteSitePhoto, setFacilities, updateWebsiteInfo } from "@/services/website";
 import { whatsappNumber } from "@/lib/share";
 import { generateTempPassword, loginMessage, whatsappLink } from "@/lib/share";
 import { headers } from "next/headers";
@@ -544,6 +544,16 @@ export async function updateWebsiteAction(f: FormData) {
     revalidatePath("/");
     revalidatePath("/admin/website");
     return "Website details saved";
+  });
+}
+
+export async function updateFacilitiesAction(f: FormData) {
+  return run(async () => {
+    const me = await requireAdmin();
+    await setFacilities(getDb(), me.id, f.getAll("on").map(String)); // only the ticked ones are sent
+    revalidatePath("/");
+    revalidatePath("/admin/website");
+    return "Facilities saved";
   });
 }
 

@@ -174,6 +174,8 @@ export const rentSettings = sqliteTable(
     whatsapp: text("whatsapp").notNull().default(""),
     contactEmail: text("contact_email").notNull().default(""),
     mapsLink: text("maps_link").notNull().default(""),
+    /** JSON list of landing-page facilities the owner has switched off (see src/lib/facilities.ts). */
+    hiddenFacilities: text("hidden_facilities").notNull().default("[]"),
     updatedAt: updatedAt(),
   },
   (t) => [check("rent_settings_single", sql`${t.id} = 1`), check("due_day_range", sql`${t.dueDayOfMonth} between 1 and 28`)],

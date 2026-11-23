@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Armchair, Bath, BedDouble, ImageIcon, Mail, MapPin, MessageCircle, Phone, Sofa, Utensils } from "lucide-react";
+import { Armchair, Bath, BedDouble, ImageIcon, Mail, MapPin, MessageCircle, Phone, Refrigerator, Sofa, Utensils, WashingMachine, Droplets, Wifi, Cctv } from "lucide-react";
 import { LogoMark } from "@/components/logo";
 import { LoginModal, LoginTrigger } from "@/components/login-modal";
 import { PoweredBy } from "@/components/powered-by";
 import { getDb } from "@/db/client";
 import { whatsappNumber } from "@/lib/share";
 import { roomSummaries } from "@/services/rooms";
-import { DEFAULT_WEBSITE, getWebsiteInfo, listSitePhotos } from "@/services/website";
+import { DEFAULT_WEBSITE, getHiddenFacilities, getWebsiteInfo, listSitePhotos } from "@/services/website";
 
 // Public page: rebuilt at most every 5 minutes, and immediately when the owner saves changes under Admin → Website.
 export const revalidate = 300;
@@ -15,10 +15,10 @@ export const revalidate = 300;
 async function load() {
   try {
     const db = getDb();
-    const [info, photos, rooms] = await Promise.all([getWebsiteInfo(db), listSitePhotos(db), roomSummaries(db)]);
-    return { info, photos, rooms };
+    const [info, photos, rooms, hidden] = await Promise.all([getWebsiteInfo(db), listSitePhotos(db), roomSummaries(db), getHiddenFacilities(db)]);
+    return { info, photos, rooms, hidden };
   } catch {
-    return { info: DEFAULT_WEBSITE, photos: [], rooms: [] }; // never break the home page if the database is unreachable
+    return { info: DEFAULT_WEBSITE, photos: [], rooms: [], hidden: [] as string[] }; // never break the home page if the database is unreachable
   }
 }
 
@@ -30,17 +30,23 @@ export async function generateMetadata(): Promise<Metadata> {
 const btn = "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold transition-colors";
 
 export default async function Landing() {
-  const { info, photos, rooms } = await load();
+  const { info, photos, rooms, hidden } = await load();
   const beds = rooms.reduce((a, r) => a + r.beds, 0);
   const allBathrooms = rooms.length > 0 && rooms.every((r) => r.bathroom);
   const wa = whatsappNumber(info.whatsapp);
+  // each facility has a key; the owner switches them on/off under Settings → Website
   const facilities = [
-    ...(rooms.length ? [{ icon: BedDouble, title: `${rooms.length} bedroom${rooms.length > 1 ? "s" : ""}`, text: `${beds} beds in total${rooms.length ? ` — up to ${Math.max(...rooms.map((r) => r.beds))} sharing` : ""}` }] : []),
-    ...(allBathrooms ? [{ icon: Bath, title: "Attached bathrooms", text: "Every bedroom has its own bathroom" }] : []),
-    { icon: Utensils, title: "Shared kitchen", text: "A kitchen for all residents" },
-    { icon: Sofa, title: "Shared hall", text: "A common space to relax" },
-    { icon: Armchair, title: "Sit-out", text: "A shared open sit-out area" },
-  ];
+    ...(rooms.length ? [{ key: "bedrooms", icon: BedDouble, title: `${rooms.length} bedroom${rooms.length > 1 ? "s" : ""}`, text: `${beds} beds in total — up to ${Math.max(...rooms.map((r) => r.beds))} sharing` }] : []),
+    ...(allBathrooms ? [{ key: "bathrooms", icon: Bath, title: "Attached bathrooms", text: "Every bedroom has its own bathroom" }] : []),
+    { key: "kitchen", icon: Utensils, title: "Shared kitchen", text: "A kitchen for all residents" },
+    { key: "hall", icon: Sofa, title: "Shared hall", text: "A common space to relax" },
+    { key: "sitout", icon: Armchair, title: "Sit-out", text: "A shared open sit-out area" },
+    { key: "fridge", icon: Refrigerator, title: "Fridge", text: "A shared fridge to keep your food fresh" },
+    { key: "washing", icon: WashingMachine, title: "Washing machine", text: "Wash your clothes at home" },
+    { key: "purifier", icon: Droplets, title: "Water purifier", text: "Clean, safe drinking water" },
+    { key: "wifi", icon: Wifi, title: "Wi-Fi", text: "Internet access for all residents" },
+    { key: "cctv", icon: Cctv, title: "CCTV at the front gate", text: "Camera watch on the entrance for safety" },
+  ].filter((f) => !hidden.includes(f.key));
   const hasContact = info.contactPhone || wa || info.contactEmail || info.address || info.mapsLink;
   return (
     <div className="min-h-dvh bg-white">
@@ -89,7 +95,7 @@ export default async function Landing() {
         )}
       </section>
 
-      <section className="border-y border-line bg-slate-50">
+      {(facilities.length > 0 || info.about) && <section className="border-y border-line bg-slate-50">
         <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
           <h2 className="text-xl font-semibold">Facilities</h2>
           {info.about && <p className="mt-3 max-w-2xl whitespace-pre-line text-sm leading-relaxed text-slate-700">{info.about}</p>}
@@ -102,7 +108,7 @@ export default async function Landing() {
             ))}
           </ul>
         </div>
-      </section>
+      </section>}
 
       <section id="contact" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
         <h2 className="text-xl font-semibold">Contact</h2>

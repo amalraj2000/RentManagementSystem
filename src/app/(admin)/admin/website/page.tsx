@@ -4,17 +4,18 @@ import { ExternalLink } from "lucide-react";
 import { ActionForm, ConfirmButton } from "@/components/action-form";
 import { FileInput } from "@/components/file-input";
 import { Card, Empty, Field, Input, PageHeader, Textarea } from "@/components/ui";
-import { addSitePhotoAction, deleteSitePhotoAction, updateWebsiteAction } from "@/actions/admin";
+import { addSitePhotoAction, deleteSitePhotoAction, updateFacilitiesAction, updateWebsiteAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { requireAdmin } from "@/lib/session";
-import { getWebsiteInfo, listSitePhotos, MAX_SITE_PHOTOS } from "@/services/website";
+import { FACILITIES } from "@/lib/facilities";
+import { getHiddenFacilities, getWebsiteInfo, listSitePhotos, MAX_SITE_PHOTOS } from "@/services/website";
 
 export const metadata = { title: "Website" };
 
 export default async function WebsiteAdmin() {
   await requireAdmin();
   const db = getDb();
-  const [w, photos] = await Promise.all([getWebsiteInfo(db), listSitePhotos(db)]);
+  const [w, photos, hidden] = await Promise.all([getWebsiteInfo(db), listSitePhotos(db), getHiddenFacilities(db)]);
   return (
     <>
       <PageHeader title="Settings" description="Landing page — what visitors see before they log in." actions={<Link href="/" target="_blank" className="inline-flex min-h-9 items-center gap-1.5 rounded-lg border border-line bg-white px-3.5 text-sm font-medium hover:bg-slate-50"><ExternalLink className="size-4" aria-hidden /> View website</Link>} />
@@ -34,6 +35,23 @@ export default async function WebsiteAdmin() {
             </div>
             <Field label="Email"><Input name="contactEmail" type="email" maxLength={200} defaultValue={w.contactEmail} /></Field>
             <Field label="Google Maps link" hint="Open your location in Google Maps → Share → copy link."><Input name="mapsLink" maxLength={500} placeholder="https://maps.app.goo.gl/…" defaultValue={w.mapsLink} /></Field>
+          </ActionForm>
+        </Card>
+        <Card className="p-5">
+          <h2 className="mb-1 text-sm font-semibold">Facilities</h2>
+          <p className="mb-3 text-xs text-muted">Switch on what your PG offers. Only the switched-on ones are shown on the website.</p>
+          <ActionForm action={updateFacilitiesAction} submit="Save facilities" reset={false}>
+            <ul className="divide-y divide-line rounded-lg border border-line">
+              {FACILITIES.map((fa) => (
+                <li key={fa.key}>
+                  <label className="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5">
+                    <span className="min-w-0"><span className="block text-sm font-medium">{fa.label}</span>{"hint" in fa && <span className="block text-xs text-muted">{fa.hint}</span>}</span>
+                    <input type="checkbox" name="on" value={fa.key} defaultChecked={!hidden.includes(fa.key)} className="peer sr-only" />
+                    <span aria-hidden className="relative h-6 w-11 shrink-0 rounded-full bg-slate-300 transition-colors after:absolute after:left-0.5 after:top-0.5 after:size-5 after:rounded-full after:bg-white after:shadow after:transition-transform peer-checked:bg-accent peer-checked:after:translate-x-5 peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-accent" />
+                  </label>
+                </li>
+              ))}
+            </ul>
           </ActionForm>
         </Card>
         <Card className="p-5">
