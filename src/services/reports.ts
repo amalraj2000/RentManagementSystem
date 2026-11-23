@@ -3,6 +3,7 @@ import type { DB } from "@/db/client";
 import { bedAssignments, expenses, invoiceItems, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
 import { addMonths, monthEnd, monthStart } from "@/lib/dates";
 import { expenseLinesFor } from "./expense-lines";
+import { categoryLabel } from "@/lib/categories";
 import { allocatePayment, splitRentExpense, type Cat } from "@/lib/billing";
 
 const outstandingExpr = sql<number>`coalesce(sum(max(${invoices.totalPaise} - ${invoices.paidPaise}, 0)), 0)`;
@@ -151,6 +152,35 @@ export async function unpaidThisMonth(db: DB, month: string) {
       .filter((x) => x.l && x.l.balance > 0)
       .map((x) => ({ itemId: x.i.id, category: x.i.category ?? (x.i.kind === "electricity" || x.i.kind === "water" ? x.i.kind : "other"), balance: x.l!.balance }));
     if (split.rentBalance > 0 || due.length) out.push({ invoiceId: inv.id, tenantId: inv.tenantId, name: inv.name, rentBalance: split.rentBalance, lines: due });
+  }
+  return out;
+}
+
+/**
+ * Everything still unpaid for the given tenants, oldest first — each rent month and each expense line on its own.
+ * `key` is what the "Mark paid" dialog sends back: "rent|<invoiceId>" or "line|<invoiceId>|<itemId>".
+ */
+export async function unpaidItemsByTenant(db: DB, tenantIds: string[]) {
+  const out = new Map<string, { key: string; label: string; amount: number; month: string; kind: "rent" | "expense" }[]>();
+  if (!tenantIds.length) return out;
+  const invs = (await invoiceSplits(db, inArray(invoices.tenantId, tenantIds))).sort((a, b) => a.periodMonth.localeCompare(b.periodMonth));
+  if (!invs.length) return out;
+  const ids = invs.map((i) => i.id);
+  const items = await db
+    .select({ id: invoiceItems.id, invoiceId: invoiceItems.invoiceId, kind: invoiceItems.kind, category: expenses.category })
+    .from(invoiceItems)
+    .leftJoin(expenses, eq(expenses.id, invoiceItems.expenseId))
+    .where(and(inArray(invoiceItems.invoiceId, ids), sql`${invoiceItems.kind} not in ('rent', 'adjustment')`));
+  const lines = await expenseLinesFor(db, ids);
+  for (const inv of invs) {
+    const list = out.get(inv.tenantId) ?? [];
+    if (inv.split.rentBalance > 0) list.push({ key: `rent|${inv.id}`, label: "Rent", amount: inv.split.rentBalance, month: inv.periodMonth, kind: "rent" });
+    for (const it of items.filter((x) => x.invoiceId === inv.id)) {
+      const l = lines.get(inv.id)?.get(it.id);
+      if (!l || l.balance <= 0) continue;
+      list.push({ key: `line|${inv.id}|${it.id}`, label: categoryLabel(it.category ?? (it.kind === "electricity" || it.kind === "water" ? it.kind : "other")), amount: l.balance, month: inv.periodMonth, kind: "expense" });
+    }
+    if (list.length) out.set(inv.tenantId, list);
   }
   return out;
 }

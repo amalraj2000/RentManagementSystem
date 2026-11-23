@@ -90,13 +90,15 @@ describe("rooms and beds", () => {
     ).rejects.toThrow();
   });
   it("never exceeds 4 residents per room", async () => {
-    const rooms = await listRoomsWithBeds(db);
+    const d = await testDb(); // its own database: the PG as a whole is limited to 8 active tenants
+    const adm = await seedAdmin(d);
+    const rooms = await listRoomsWithBeds(d);
     const room2 = rooms[1];
-    for (const bed of room2.beds) if (!bed.tenantId) await addTenant(db, admin, { bedId: bed.id });
-    const after = (await listRoomsWithBeds(db))[1];
+    for (const bed of room2.beds) if (!bed.tenantId) await addTenant(d, adm, { bedId: bed.id });
+    const after = (await listRoomsWithBeds(d))[1];
     expect(after.beds.filter((b) => b.tenantId).length).toBe(4);
-    const extra = await addTenant(db, admin);
-    for (const bed of after.beds) await expect(moveTenantToBed(db, admin, extra, bed.id, "2026-02-01")).rejects.toThrow();
+    const extra = await addTenant(d, adm);
+    for (const bed of after.beds) await expect(moveTenantToBed(d, adm, extra, bed.id, "2026-02-01")).rejects.toThrow();
   });
 });
 
@@ -1243,5 +1245,85 @@ describe("undo vacate and mark paid", () => {
     now = await mySharedItems(d, userId);
     expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "unpaid" });
     await expect(markPaid(d, adm, { invoiceId: inv.id, method: "upi" })).rejects.toThrow(/already paid/);
+  });
+});
+
+describe("expense status (active / completed)", () => {
+  it("stays active until every tenant has paid, then completes; lists who paid", async () => {
+    const { expenseStatuses } = await import("@/services/expense-status");
+    const { markPaid } = await import("@/services/billing");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const beds = await allBeds(d);
+    await addTenant(d, adm, { name: "Pay One", bedId: beds[0].id });
+    await addTenant(d, adm, { name: "Pay Two", bedId: beds[1].id });
+    const id = await addExpense(d, adm, { category: "cooking_gas", amountPaise: 100000, spentOn: "2026-03-05", description: "", share: { mode: "equal" } });
+    const solo = await addExpense(d, adm, { category: "water", amountPaise: 5000, spentOn: "2026-03-05", description: "" });
+    const get = async () => (await expenseStatuses(d, [{ id, utilityBillId: null }, { id: solo, utilityBillId: null }]));
+    let s = (await get()).get(id)!;
+    expect(s).toMatchObject({ state: "active", paidCount: 0, total: 2 });
+    expect((await get()).get(solo)!.state).toBe("none"); // not shared with anyone
+    // first tenant pays: still active, one of two paid, the unpaid tenant is listed first
+    await markPaid(d, adm, { invoiceId: s.rows[0].invoiceId!, itemId: (await d.select().from(invoiceItems).where(and(eq(invoiceItems.invoiceId, s.rows[0].invoiceId!), eq(invoiceItems.expenseId, id))))[0].id, method: "cash" });
+    s = (await get()).get(id)!;
+    expect(s).toMatchObject({ state: "active", paidCount: 1, total: 2 });
+    expect(s.rows.map((r) => r.state)).toEqual(["unpaid", "paid"]);
+    // second tenant pays: completed
+    await markPaid(d, adm, { invoiceId: s.rows[0].invoiceId!, itemId: (await d.select().from(invoiceItems).where(and(eq(invoiceItems.invoiceId, s.rows[0].invoiceId!), eq(invoiceItems.expenseId, id))))[0].id, method: "upi" });
+    s = (await get()).get(id)!;
+    expect(s).toMatchObject({ state: "completed", paidCount: 2, total: 2 });
+  });
+});
+
+describe("active tenant limit", () => {
+  it("allows at most 8 active tenants; vacating frees a place; undo vacate is blocked when full", async () => {
+    const { revertVacate, activeTenantCount } = await import("@/services/tenants");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const ids: string[] = [];
+    for (let i = 0; i < 8; i++) ids.push(await addTenant(d, adm, { name: `Limit ${i}`, bedId: null }));
+    expect(await activeTenantCount(d)).toBe(8);
+    await expect(addTenant(d, adm, { name: "One too many", bedId: null })).rejects.toThrow(/8 active tenants/);
+    await vacateTenant(d, adm, ids[0], "2026-03-01");
+    expect(await activeTenantCount(d)).toBe(7);
+    const replacement = await addTenant(d, adm, { name: "Replacement", bedId: null });
+    expect(replacement).toBeTruthy();
+    await expect(revertVacate(d, adm, ids[0])).rejects.toThrow(/8 active tenants/);
+  });
+});
+
+describe("arranging who sleeps where", () => {
+  it("swaps tenants, brings one in from another room, frees a bed, and rejects duplicates", async () => {
+    const { arrangeRoomBeds } = await import("@/services/tenants");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const rooms = await listRoomsWithBeds(d);
+    const [r1, r2] = rooms;
+    const a = await addTenant(d, adm, { name: "A", bedId: r1.beds[0].id });
+    const b = await addTenant(d, adm, { name: "B", bedId: r1.beds[1].id });
+    const c = await addTenant(d, adm, { name: "C", bedId: r2.beds[0].id });
+    const e = await addTenant(d, adm, { name: "E", bedId: null });
+    const who = async () => Object.fromEntries((await listRoomsWithBeds(d)).flatMap((r) => r.beds.map((x) => [`${r.name}#${x.number}`, x.tenantName])));
+
+    // swap A and B inside room 1
+    await arrangeRoomBeds(d, adm, r1.id, { [r1.beds[0].id]: b, [r1.beds[1].id]: a, [r1.beds[2].id]: "", [r1.beds[3].id]: "" }, "2026-03-01");
+    let now = await who();
+    expect(now[`${r1.name}#1`]).toBe("B");
+    expect(now[`${r1.name}#2`]).toBe("A");
+
+    // bring C in from room 2, and E (no bed) in; B leaves to "no bed" by being left out
+    await arrangeRoomBeds(d, adm, r1.id, { [r1.beds[0].id]: c, [r1.beds[1].id]: a, [r1.beds[2].id]: e, [r1.beds[3].id]: "" }, "2026-03-02");
+    now = await who();
+    expect(now[`${r1.name}#1`]).toBe("C");
+    expect(now[`${r1.name}#3`]).toBe("E");
+    expect(now[`${r2.name}#1`]).toBeNull(); // C left room 2
+    expect((await d.select().from(bedAssignments).where(and(eq(bedAssignments.tenantId, b), isNull(bedAssignments.endDate)))).length).toBe(0); // B has no bed now
+
+    // the same tenant twice is refused, and nothing changes
+    await expect(arrangeRoomBeds(d, adm, r1.id, { [r1.beds[0].id]: a, [r1.beds[1].id]: a }, "2026-03-03")).rejects.toThrow(/only sleep in one bed/);
+    expect((await who())[`${r1.name}#1`]).toBe("C");
+    // a vacated tenant can't be given a bed
+    await vacateTenant(d, adm, b, "2026-03-04");
+    await expect(arrangeRoomBeds(d, adm, r1.id, { [r1.beds[3].id]: b }, "2026-03-05")).rejects.toThrow(/active tenants/);
   });
 });

@@ -10,6 +10,10 @@ import { ConfirmButton } from "@/components/action-form";
 import { Badge, buttonClass, EditLink, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
 import { offsetFor, PAGE_SIZE, pageParam } from "@/lib/page";
 import { deleteTenantAction, revertVacateAction } from "@/actions/admin";
+import { MarkPaidButton } from "@/components/mark-paid-button";
+import { unpaidItemsByTenant } from "@/services/reports";
+import { AddTenantButton } from "@/components/add-tenant-button";
+import { activeTenantCount } from "@/services/tenants";
 import { formatDate } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 
@@ -31,10 +35,11 @@ export default async function Tenants({ searchParams }: { searchParams: Promise<
     .orderBy(asc(tenantProfiles.status), desc(tenantProfiles.createdAt))
     .limit(PAGE_SIZE)
     .offset(offsetFor(page));
+  const [unpaid, active] = await Promise.all([unpaidItemsByTenant(getDb(), rows.map((r) => r.id)), activeTenantCount(getDb())]);
   const [{ total }] = await getDb().select({ total: sql<number>`count(*)` }).from(tenantProfiles);
   return (
     <>
-      <PageHeader title="Tenants" actions={<Link href="/admin/tenants/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Add tenant</Link>} />
+      <PageHeader title="Tenants" actions={<AddTenantButton active={active} />} />
       {rows.length === 0 ? <Empty>No tenants yet. Add your first resident.</Empty> : (
         <Table>
           <thead><tr><Th>Name</Th><Th>Bed</Th><Th>Mobile number</Th><Th>Rent</Th><Th>Joined</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
@@ -49,6 +54,7 @@ export default async function Tenants({ searchParams }: { searchParams: Promise<
                 <Td><Badge kind={r.status} /></Td>
                 <Td>
                   <RowActions>
+                    <MarkPaidButton iconOnly name={r.name} items={unpaid.get(r.id) ?? []} />
                     <ImpersonateButton tenantId={r.id} name={r.name} />
                     {r.status !== "moved_out" && <ShareLoginButton tenantId={r.id} name={r.name} />}
                     {r.status === "moved_out" && <ConfirmButton label="Undo vacate" variant="secondary" title={`Undo vacate for ${r.name}?`} body="They become an active tenant again and billing resumes. Their old bed is given back if it is still free." action={revertVacateAction.bind(null, r.id)} confirmLabel="Undo vacate" />}

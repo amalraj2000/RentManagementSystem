@@ -10,7 +10,7 @@ import { requireAdmin } from "@/lib/session";
 import * as S from "@/lib/schemas";
 import { addInvoiceItem, deleteInvoice, markPaid, recordPayment, syncInvoices, updatePaymentDetails, voidPayment } from "@/services/billing";
 import { addExpense, deleteAnnouncement, deleteExpense, postAnnouncement, updateAnnouncement, updateExpense, updateSettings } from "@/services/misc";
-import { createTenant, deleteTenant, revertVacate, vacateTenant, moveTenantToBed, resetTenantPassword, setTenantLoginActive, updateTenant } from "@/services/tenants";
+import { arrangeRoomBeds, createTenant, deleteTenant, revertVacate, vacateTenant, moveTenantToBed, resetTenantPassword, setTenantLoginActive, updateTenant } from "@/services/tenants";
 import { createAdminUser, deleteAdminUser, resetAdminPassword, setAdminActive, updateAdminUser } from "@/services/admins";
 import { createRoom, deleteRoom, updateRoom } from "@/services/rooms";
 import { approveClaim, rejectClaim } from "@/services/claims";
@@ -24,6 +24,7 @@ import { beds, tenantProfiles, users } from "@/db/schema";
 import { ROOM_ADD_DELETE_ENABLED } from "@/lib/features";
 import { deleteDocument, uploadDocument, validateFile } from "@/services/documents";
 import { AppError } from "@/services/common";
+import { todayISO } from "@/lib/dates";
 import { createUtilityBill, deleteUtilityBill, updateUtilityDetails } from "@/services/utilities";
 
 const tenantFields = {
@@ -122,6 +123,19 @@ export async function vacateAction(tenantId: string, f: FormData) {
   });
 }
 
+/** Saves "who sleeps where" for one room. Form fields are named bed_<bedId> and hold a tenant id (or empty). */
+export async function arrangeBedsAction(roomId: string, f: FormData) {
+  return run(async () => {
+    const me = await requireAdmin();
+    const picks: Record<string, string> = {};
+    for (const [k, v] of f.entries()) if (k.startsWith("bed_") && typeof v === "string") picks[S.id.parse(k.slice(4))] = v ? S.id.parse(v) : "";
+    const r = await arrangeRoomBeds(getDb(), me.id, S.id.parse(roomId), picks, todayISO());
+    revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
+    return r.moved || r.removed ? "Beds updated" : "Nothing changed";
+  });
+}
+
 export async function revertVacateAction(tenantId: string) {
   return run(async () => {
     const me = await requireAdmin();
@@ -198,6 +212,26 @@ export async function markPaidAction(invoiceId: string, target: string, f: FormD
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return `Marked as paid · receipt ${r.receiptNo}`;
+  });
+}
+
+/** Marks several things as paid in one go. Each pick is "rent|<invoiceId>" or "line|<invoiceId>|<itemId>"; each is paid in full, on its own. */
+export async function markPaidManyAction(f: FormData) {
+  return run(async () => {
+    const me = await requireAdmin();
+    const d = z.object({ method: z.enum(["upi", "cash"]) }).parse(fd(f));
+    const picks = f.getAll("pick").map(String);
+    if (!picks.length) throw new AppError("Tick what has been paid");
+    let n = 0;
+    for (const pick of picks) {
+      const [type, invoiceId, itemId] = pick.split("|");
+      if (type !== "rent" && type !== "line") throw new AppError("Something in the list is not valid");
+      await markPaid(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), itemId: type === "line" ? S.id.parse(itemId) : null, method: d.method });
+      n++;
+    }
+    revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
+    return `Marked ${n} item${n > 1 ? "s" : ""} as paid`;
   });
 }
 

@@ -100,6 +100,7 @@ export function ConfirmButton({
   className,
   withReason,
   extra,
+  icon: iconProp,
 }: {
   action: (formData: FormData) => Promise<ActionResult>;
   label: ReactNode;
@@ -111,17 +112,19 @@ export function ConfirmButton({
   withReason?: boolean;
   /** Extra form fields inside the dialog (validated like any form). */
   extra?: ReactNode;
+  /** Show this icon instead of the text label (the label becomes the tooltip). */
+  icon?: ReactNode;
 }) {
   const dlg = useRef<HTMLDialogElement>(null);
   const [pending, start] = useTransition();
   const mounted = useSyncExternalStore(() => () => {}, () => true, () => false); // client only, so the portal never mismatches SSR
   // Table-row actions labelled exactly "Delete" / "Void" render as icon buttons.
   const icon =
-    label === "Delete" ? <Trash2 className="size-4" aria-hidden /> : label === "Void" ? <Ban className="size-4" aria-hidden /> : label === "Approve" ? <Check className="size-4" aria-hidden /> : label === "Reject" ? <X className="size-4" aria-hidden /> : null;
+    label === "Delete" ? <Trash2 className="size-4" aria-hidden /> : label === "Void" ? <Ban className="size-4" aria-hidden /> : label === "Approve" ? <Check className="size-4" aria-hidden /> : label === "Reject" ? <X className="size-4" aria-hidden /> : iconProp ?? null;
   return (
     <>
       {icon ? (
-        <button type="button" title={String(label)} aria-label={String(label)} className={cn(iconButtonClass(variant === "danger" ? "danger" : "neutral"), className)} onClick={() => dlg.current?.showModal()}>
+        <button type="button" title={String(label)} aria-label={String(label)} className={cn(iconButtonClass(variant === "danger" ? "danger" : variant === "primary" ? "primary" : "neutral"), className)} onClick={() => dlg.current?.showModal()}>
           {icon}
         </button>
       ) : (

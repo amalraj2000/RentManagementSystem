@@ -3,11 +3,11 @@ import { eq } from "drizzle-orm";
 import { ActionForm } from "@/components/action-form";
 import { BackLink } from "@/components/back-link";
 import { RoomFields } from "@/components/room-fields";
-import { Badge, Card, EditLink, PageHeader, RowActions, Table, Td, Th } from "@/components/ui";
-import { updateRoomAction } from "@/actions/admin";
+import { Card, Field, PageHeader, Select } from "@/components/ui";
+import { arrangeBedsAction, updateRoomAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { rooms } from "@/db/schema";
-import { listRoomsWithBeds } from "@/services/tenants";
+import { listActiveTenantsWithBed, listRoomsWithBeds } from "@/services/tenants";
 
 export const metadata = { title: "Edit room" };
 
@@ -16,7 +16,8 @@ export default async function EditRoom({ params }: { params: Promise<{ id: strin
   const db = getDb();
   const [room] = await db.select().from(rooms).where(eq(rooms.id, id));
   if (!room || room.archivedAt) notFound();
-  const detail = (await listRoomsWithBeds(db)).find((r) => r.id === id);
+  const [all, people] = await Promise.all([listRoomsWithBeds(db), listActiveTenantsWithBed(db)]);
+  const detail = all.find((r) => r.id === id);
   return (
     <>
       <BackLink href="/admin/rooms" label="Rooms & beds" />
@@ -26,23 +27,26 @@ export default async function EditRoom({ params }: { params: Promise<{ id: strin
           <h2 className="mb-3 text-sm font-semibold">Room details</h2>
           <ActionForm action={updateRoomAction.bind(null, id)} redirectTo="/admin/rooms" reset={false}><RoomFields r={room} /></ActionForm>
         </Card>
-        <div>
-          <h2 className="mb-2 text-sm font-semibold">Beds in this room</h2>
-          <Table>
-            <thead><tr><Th>Bed</Th><Th>Occupant</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
-            <tbody>
+        <Card className="p-5">
+          <h2 className="mb-1 text-sm font-semibold">Who sleeps where</h2>
+          <p className="mb-3 text-xs text-muted">Choose a tenant for each bed. To swap two tenants, pick each one in the other&apos;s bed. Someone from another room is moved here. Leave a bed empty to free it.</p>
+          <ActionForm action={arrangeBedsAction.bind(null, id)} submit="Save beds" reset={false}>
+            <ul className="space-y-3">
               {(detail?.beds ?? []).map((b) => (
-                <tr key={b.id}>
-                  <Td className="font-medium">Bed {b.number}</Td>
-                  <Td>{b.tenantName ?? <span className="text-muted">—</span>}</Td>
-                  <Td>{b.tenantId ? <Badge kind="active" /> : <span className="text-xs text-muted">Vacant</span>}</Td>
-                  <Td><RowActions>{b.tenantId ? <EditLink href={`/admin/tenants/${b.tenantId}`} label="Edit / move" /> : <EditLink href="/admin/tenants/new" label="Assign tenant" />}</RowActions></Td>
-                </tr>
+                <li key={b.id}>
+                  <Field label={`Bed ${b.number}`}>
+                    <Select name={`bed_${b.id}`} defaultValue={b.tenantId ?? ""}>
+                      <option value="">— Empty —</option>
+                      {people.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}{t.room && t.room !== room.name ? ` (now in ${t.room} · Bed ${t.bed})` : !t.room ? " (no bed yet)" : ""}</option>
+                      ))}
+                    </Select>
+                  </Field>
+                </li>
               ))}
-            </tbody>
-          </Table>
-          <p className="mt-2 text-xs text-muted">Change the number of beds on the left. Reducing it only removes vacant beds that never had a tenant.</p>
-        </div>
+            </ul>
+          </ActionForm>
+        </Card>
       </div>
     </>
   );

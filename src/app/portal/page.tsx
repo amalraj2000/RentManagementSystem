@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { CalendarClock, Megaphone, Pin } from "lucide-react";
 import { LiveClock } from "@/components/live-clock";
-import { Badge, buttonClass, Card, Empty } from "@/components/ui";
+import { Badge, buttonClass, Card } from "@/components/ui";
 import { getDb } from "@/db/client";
 import { rentState, splitRentExpense } from "@/lib/billing";
 import { currentMonth, formatDate, monthLabel, todayISO } from "@/lib/dates";
@@ -98,13 +98,14 @@ export default async function PortalHome() {
         )}
       </section>
 
+      {/* shown only when the owner has posted something */}
+      {notices.length > 0 && (
       <section aria-labelledby="notices" className="mt-7">
         <div className="mb-2 flex items-center justify-between">
           <h2 id="notices" className="text-sm font-semibold">Announcements</h2>
-          {notices.length > 0 && <Link href="/portal/notices" className="text-sm font-medium text-accent hover:underline">See all</Link>}
+          <Link href="/portal/notices" className="text-sm font-medium text-accent hover:underline">See all</Link>
         </div>
-        {notices.length === 0 ? <Card><Empty>No announcements.</Empty></Card> : (
-          <ul className="space-y-2">
+        <ul className="space-y-2">
             {notices.map((n) => (
               <li key={n.id}>
                 <Card className="p-4">
@@ -118,8 +119,8 @@ export default async function PortalHome() {
               </li>
             ))}
           </ul>
-        )}
       </section>
+      )}
     </div>
   );
 }

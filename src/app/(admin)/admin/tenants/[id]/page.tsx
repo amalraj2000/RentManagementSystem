@@ -7,7 +7,8 @@ import { Badge, Card, Empty, Field, Input, PageHeader, Select, Table, Td, Th } f
 import { deleteTenantAction, moveBedAction, revertVacateAction, vacateAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { bedAssignments, beds, invoices, rooms, tenantProfiles, users } from "@/db/schema";
-import { invoiceSplits } from "@/services/reports";
+import { invoiceSplits, unpaidItemsByTenant } from "@/services/reports";
+import { MarkPaidButton } from "@/components/mark-paid-button";
 import { formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { listRoomsWithBeds } from "@/services/tenants";
@@ -56,7 +57,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
       <PageHeader
         title={row.name}
         description={current ? `${current.room} · Bed ${current.bed}` : movedOut ? `Vacated ${formatDate(p.moveOutDate)}` : "No bed assigned"}
-        actions={<Badge kind={p.status} />}
+        actions={<><MarkPaidButton name={row.name} items={(await unpaidItemsByTenant(db, [id])).get(id) ?? []} /><Badge kind={p.status} /></>}
       />
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
         <div className="space-y-4">

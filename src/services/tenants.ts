@@ -1,4 +1,5 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
+import { MAX_ACTIVE_TENANTS } from "@/lib/features";
 import type { DB } from "@/db/client";
 import { bedAssignments, beds, invoices, payments, rooms, tenantDocuments, tenantProfiles, users } from "@/db/schema";
 import { hashPassword, passwordProblem, destroyUserSessions } from "@/lib/auth-core";
@@ -37,12 +38,82 @@ export async function assignBedTx(q: Q, tenantId: string, bedId: string, startDa
   await q.insert(bedAssignments).values({ bedId, tenantId, startDate });
 }
 
+/** Everyone who has not vacated, with the bed they have now (if any) — for choosing who sleeps where. */
+export async function listActiveTenantsWithBed(db: DB) {
+  return db
+    .select({ id: tenantProfiles.id, name: users.name, room: rooms.name, bed: beds.bedNumber })
+    .from(tenantProfiles)
+    .innerJoin(users, eq(users.id, tenantProfiles.userId))
+    .leftJoin(bedAssignments, and(eq(bedAssignments.tenantId, tenantProfiles.id), isNull(bedAssignments.endDate)))
+    .leftJoin(beds, eq(beds.id, bedAssignments.bedId))
+    .leftJoin(rooms, eq(rooms.id, beds.roomId))
+    .where(ne(tenantProfiles.status, "moved_out"))
+    .orderBy(users.name);
+}
+
+/**
+ * Re-arranges who sleeps in which bed of ONE room. `picks` maps each bed of the room to a tenant id, or "" for an empty bed.
+ * Tenants can be swapped inside the room, brought in from another room or from "no bed", or sent to "no bed" by leaving them out.
+ * Beds that are not changed are left alone. All or nothing.
+ */
+export async function arrangeRoomBeds(db: DB, actorId: string, roomId: string, picks: Record<string, string>, date: string) {
+  return db.transaction(async (tx) => {
+    const roomBeds = await tx.select().from(beds).where(eq(beds.roomId, roomId));
+    if (!roomBeds.length) throw new AppError("Room not found");
+    const bedIds = new Set(roomBeds.map((b) => b.id));
+    const wanted = new Map<string, string>(); // tenant -> bed
+    for (const [bedId, tenantId] of Object.entries(picks)) {
+      if (!bedIds.has(bedId)) throw new AppError("That bed is not in this room");
+      if (!tenantId) continue;
+      if (wanted.has(tenantId)) throw new AppError("A tenant can only sleep in one bed. Pick each tenant once.");
+      wanted.set(tenantId, bedId);
+    }
+    for (const tenantId of wanted.keys()) {
+      const [p] = await tx.select({ status: tenantProfiles.status }).from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
+      if (!p || p.status === "moved_out") throw new AppError("Only active tenants can be given a bed");
+    }
+    const open = await tx.select().from(bedAssignments).where(isNull(bedAssignments.endDate));
+    const inRoomNow = open.filter((a) => bedIds.has(a.bedId));
+    // 1) end the beds that change: people leaving this room's beds, and people moving into them
+    const toEnd = new Set<string>();
+    for (const a of inRoomNow) if (wanted.get(a.tenantId) !== a.bedId) toEnd.add(a.tenantId);
+    for (const [tenantId, bedId] of wanted) if (!open.some((a) => a.tenantId === tenantId && a.bedId === bedId)) toEnd.add(tenantId);
+    for (const tenantId of toEnd) {
+      const [mine] = open.filter((a) => a.tenantId === tenantId);
+      if (mine) {
+        const [row] = await tx.select({ start: bedAssignments.startDate }).from(bedAssignments).where(eq(bedAssignments.id, mine.id));
+        await tx.update(bedAssignments).set({ endDate: date < row.start ? row.start : date }).where(eq(bedAssignments.id, mine.id));
+      }
+    }
+    // 2) give the new beds
+    let moved = 0;
+    for (const [tenantId, bedId] of wanted) {
+      if (!toEnd.has(tenantId)) continue;
+      await assignBedTx(tx, tenantId, bedId, date);
+      moved++;
+    }
+    await audit(tx, actorId, "room.arrange_beds", "room", roomId, { moved, removed: [...toEnd].filter((t) => !wanted.has(t)).length });
+    return { moved, removed: [...toEnd].filter((t) => !wanted.has(t)).length };
+  });
+}
+
+/** Tenants who are living here now (everyone who has not vacated). */
+export async function activeTenantCount(q: Q) {
+  const [r] = await q.select({ n: sql<number>`count(*)` }).from(tenantProfiles).where(ne(tenantProfiles.status, "moved_out"));
+  return Number(r.n);
+}
+
+function assertRoomForTenant(active: number) {
+  if (active >= MAX_ACTIVE_TENANTS) throw new AppError(`The PG already has ${MAX_ACTIVE_TENANTS} active tenants, so no more can be added. Vacate someone first.`);
+}
+
 export async function createTenant(db: DB, actorId: string, input: TenantInput & { password: string; bedId?: string | null; photo?: ValidFile | null; idProof?: { file: ValidFile; idType?: string | null } | null }) {
   const problem = passwordProblem(input.password);
   if (problem) throw new AppError(problem, "password");
   const email = input.email.trim().toLowerCase();
   const passwordHash = await hashPassword(input.password);
   return db.transaction(async (tx) => {
+    assertRoomForTenant(await activeTenantCount(tx));
     const [dupe] = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
     if (dupe) throw new AppError("A user with this email already exists", "email");
     const [u] = await tx
@@ -139,6 +210,7 @@ export async function revertVacate(db: DB, actorId: string, tenantId: string) {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
     if (p.status !== "moved_out") throw new AppError("This tenant has not vacated");
+    assertRoomForTenant(await activeTenantCount(tx)); // coming back makes them active again
     await tx.update(tenantProfiles).set({ status: "active", moveOutDate: null }).where(eq(tenantProfiles.id, tenantId));
     // give the last bed back when it is still free
     const [last] = await tx.select().from(bedAssignments).where(eq(bedAssignments.tenantId, tenantId)).orderBy(desc(bedAssignments.startDate), desc(bedAssignments.createdAt)).limit(1);

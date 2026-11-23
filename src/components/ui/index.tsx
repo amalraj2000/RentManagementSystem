@@ -76,8 +76,10 @@ const tones: Record<string, string> = {
   confirmed: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   rejected: "bg-red-50 text-red-700 ring-red-200",
   voided: "bg-slate-100 text-slate-500 ring-slate-200",
+  completed: "bg-slate-100 text-slate-600 ring-slate-200",
+  not_billed: "bg-slate-100 text-slate-500 ring-slate-200",
 };
-const labels: Record<string, string> = { cancelled: "Cancelled", rejected: "Rejected", waiting: "Waiting for confirmation", pending: "Waiting", moved_out: "Vacated", partial: "Partly paid", notice: "Notice period" };
+const labels: Record<string, string> = { cancelled: "Cancelled", rejected: "Rejected", waiting: "Waiting for confirmation", pending: "Waiting", moved_out: "Vacated", partial: "Partly paid", notice: "Notice period", completed: "Completed", not_billed: "Not billed yet" };
 export function Badge({ kind, wrap }: { kind: string; wrap?: boolean }) {
   return (
     <span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset", wrap ? "whitespace-normal text-center leading-tight" : "whitespace-nowrap", tones[kind] ?? tones.unpaid)}>
@@ -204,8 +206,8 @@ export function RowActions({ children }: { children: ReactNode }) {
   return <div className="flex items-center justify-end gap-1.5">{children}</div>;
 }
 const iconBtn = "inline-flex size-8 shrink-0 items-center justify-center rounded-lg border transition-colors";
-export const iconButtonClass = (tone: "neutral" | "danger" = "neutral") =>
-  cn(iconBtn, tone === "danger" ? "border-red-200 bg-white text-red-700 hover:bg-red-50" : "border-line bg-white text-slate-600 hover:bg-slate-50 hover:text-ink");
+export const iconButtonClass = (tone: "neutral" | "danger" | "primary" = "neutral") =>
+  cn(iconBtn, tone === "danger" ? "border-red-200 bg-white text-red-700 hover:bg-red-50" : tone === "primary" ? "border-accent bg-accent text-white hover:bg-accent-hover" : "border-line bg-white text-slate-600 hover:bg-slate-50 hover:text-ink");
 
 const editIcons: Record<string, ReactNode> = {
   Edit: <Pencil className="size-4" aria-hidden />,
