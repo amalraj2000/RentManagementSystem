@@ -1,7 +1,7 @@
 import { Field, Input, Select, Textarea } from "@/components/ui";
 import { paiseToInput } from "@/lib/money";
 
-type T = { name?: string; email?: string; phone?: string; joiningDate?: string; monthlyRentPaise?: number; securityDepositPaise?: number; emergencyContactName?: string | null; emergencyContactPhone?: string | null; notes?: string | null; status?: string };
+type T = { name?: string; email?: string; phone?: string; dateOfBirth?: string | null; joiningDate?: string; monthlyRentPaise?: number; securityDepositPaise?: number; emergencyContactName?: string | null; emergencyContactPhone?: string | null; notes?: string | null; status?: string };
 
 export function TenantFields({ t, defaultRentPaise }: { t?: T; defaultRentPaise?: number }) {
   return (
@@ -9,6 +9,7 @@ export function TenantFields({ t, defaultRentPaise }: { t?: T; defaultRentPaise?
       <Field label="Full name"><Input name="name" required minLength={2} maxLength={100} defaultValue={t?.name} /></Field>
       <Field label="Email (login)"><Input name="email" type="email" required defaultValue={t?.email} autoComplete="off" /></Field>
       <Field label="Mobile number"><Input name="phone" type="tel" required defaultValue={t?.phone} /></Field>
+      <Field label="Date of birth (optional)"><Input name="dob" type="date" min="1900-01-01" max={new Date().toISOString().slice(0, 10)} defaultValue={t?.dateOfBirth ?? ""} /></Field>
       <Field label="Joining date"><Input name="joiningDate" type="date" required defaultValue={t?.joiningDate} /></Field>
       <Field label="Monthly rent (₹)"><Input name="monthlyRent" inputMode="decimal" required defaultValue={paiseToInput(t?.monthlyRentPaise ?? defaultRentPaise ?? 0)} /></Field>
       <Field label="Security deposit (₹)"><Input name="deposit" inputMode="decimal" required defaultValue={paiseToInput(t?.securityDepositPaise ?? 0)} /></Field>

@@ -1327,3 +1327,23 @@ describe("arranging who sleeps where", () => {
     await expect(arrangeRoomBeds(d, adm, r1.id, { [r1.beds[3].id]: b }, "2026-03-05")).rejects.toThrow(/active tenants/);
   });
 });
+
+describe("tenant details: date of birth and self-edit", () => {
+  it("stores the date of birth and lets a tenant change only their own name, mobile and dob", async () => {
+    const { updateOwnProfile, updateTenant } = await import("@/services/tenants");
+    const { tenantForUser } = await import("@/services/portal");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const t = await addTenant(d, adm, { name: "Self Edit", rent: 123400 });
+    const [p0] = await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t));
+    const [u0] = await d.select().from(users).where(eq(users.id, p0.userId));
+    // admin sets a date of birth
+    await updateTenant(d, adm, t, { name: "Self Edit", email: u0.email, phone: p0.phone, dateOfBirth: "1998-04-02", joiningDate: p0.joiningDate, monthlyRentPaise: p0.monthlyRentPaise, securityDepositPaise: 0, status: "active" });
+    expect((await tenantForUser(d, p0.userId))!.dateOfBirth).toBe("1998-04-02");
+    // the tenant edits themselves: name, mobile, dob change; rent and email do not
+    await updateOwnProfile(d, p0.userId, { name: "Self Edited", phone: "9999900000", dateOfBirth: null });
+    const me = (await tenantForUser(d, p0.userId))!;
+    expect(me).toMatchObject({ name: "Self Edited", phone: "9999900000", dateOfBirth: null, monthlyRentPaise: 123400, email: u0.email });
+    await expect(updateOwnProfile(d, adm, { name: "Admin", phone: "9999900001", dateOfBirth: null })).rejects.toThrow(/Tenant profile/); // only tenants have this
+  });
+});

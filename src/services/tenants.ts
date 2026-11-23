@@ -12,6 +12,7 @@ export type TenantInput = {
   name: string;
   email: string;
   phone: string;
+  dateOfBirth?: string | null;
   joiningDate: string;
   monthlyRentPaise: number;
   securityDepositPaise: number;
@@ -97,6 +98,17 @@ export async function arrangeRoomBeds(db: DB, actorId: string, roomId: string, p
   });
 }
 
+/** A tenant corrects their OWN name, mobile number and date of birth. Everything else (rent, bed, email…) stays with the owner. */
+export async function updateOwnProfile(db: DB, userId: string, v: { name: string; phone: string; dateOfBirth: string | null }) {
+  await db.transaction(async (tx) => {
+    const [p] = await tx.select({ id: tenantProfiles.id }).from(tenantProfiles).where(eq(tenantProfiles.userId, userId));
+    if (!p) throw new AppError("Tenant profile not found");
+    await tx.update(users).set({ name: v.name.trim() }).where(eq(users.id, userId));
+    await tx.update(tenantProfiles).set({ phone: v.phone, dateOfBirth: v.dateOfBirth }).where(eq(tenantProfiles.id, p.id));
+    await audit(tx, userId, "tenant.self_update", "tenant", p.id);
+  });
+}
+
 /** Tenants who are living here now (everyone who has not vacated). */
 export async function activeTenantCount(q: Q) {
   const [r] = await q.select({ n: sql<number>`count(*)` }).from(tenantProfiles).where(ne(tenantProfiles.status, "moved_out"));
@@ -125,6 +137,7 @@ export async function createTenant(db: DB, actorId: string, input: TenantInput &
       .values({
         userId: u.id,
         phone: input.phone,
+        dateOfBirth: input.dateOfBirth ?? null,
         joiningDate: input.joiningDate,
         monthlyRentPaise: input.monthlyRentPaise,
         securityDepositPaise: input.securityDepositPaise,
@@ -156,6 +169,7 @@ export async function updateTenant(db: DB, actorId: string, tenantId: string, in
       .update(tenantProfiles)
       .set({
         phone: input.phone,
+        dateOfBirth: input.dateOfBirth ?? null,
         joiningDate: input.joiningDate,
         monthlyRentPaise: input.monthlyRentPaise,
         securityDepositPaise: input.securityDepositPaise,

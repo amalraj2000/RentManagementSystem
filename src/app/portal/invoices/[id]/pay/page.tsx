@@ -2,9 +2,8 @@ import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { ActionForm } from "@/components/action-form";
 import { BackLink } from "@/components/back-link";
-import { FileInput } from "@/components/file-input";
-import { ChoiceChips, METHOD_CHOICES } from "@/components/choice-chips";
-import { Card, Field, Input, PageHeader } from "@/components/ui";
+import { PayFields } from "@/components/pay-fields";
+import { Card, PageHeader } from "@/components/ui";
 import { reportPaymentAction } from "@/actions/portal";
 import { getDb } from "@/db/client";
 import { categoryLabel } from "@/lib/categories";
@@ -12,7 +11,7 @@ import { monthLabel, todayISO } from "@/lib/dates";
 import { formatINR, paiseToInput } from "@/lib/money";
 import { requireTenant } from "@/lib/session";
 import { claimsForInvoice } from "@/services/claims";
-import { getInvoiceDetail, invoiceBuckets } from "@/services/billing";
+import { getInvoiceDetail, getSettings, invoiceBuckets } from "@/services/billing";
 import { mySharedItems, tenantForUser } from "@/services/portal";
 
 export const metadata = { title: "Report a payment" };
@@ -56,6 +55,7 @@ export default async function ReportPayment({ params, searchParams }: { params: 
     claimable = Math.max(b.rentBalance - b.pendingRent, 0);
     back = "/portal/rent";
   }
+  const settings = await getSettings(db);
   const wanted = /^\d{1,9}$/.test(sp.amount ?? "") ? Number(sp.amount) : claimable;
   const prefillAmount = Math.min(Math.max(wanted, 1), claimable || 1);
   return (
@@ -70,19 +70,9 @@ export default async function ReportPayment({ params, searchParams }: { params: 
             <input type="hidden" name="purpose" value={itemId ? "expense" : "rent"} />
             <input type="hidden" name="itemId" value={itemId} />
             <input type="hidden" name="paidOn" value={todayISO()} />
-            <Field label="Amount (₹)">
-              <Input name="amount" inputMode="decimal" required defaultValue={paiseToInput(prefillAmount)} className="h-12 text-lg font-semibold" />
-            </Field>
-            <div>
-              <span className="mb-2 block text-sm font-medium">How did you pay?</span>
-              <ChoiceChips name="method" label="How did you pay" options={METHOD_CHOICES} defaultValue="upi" />
-            </div>
-            <div>
-              <span className="mb-1 block text-sm font-medium">Screenshot <span className="font-normal text-muted">(optional)</span></span>
-              <FileInput name="screenshot" accept="image/jpeg,image/png,image/webp" label="Payment screenshot" />
-            </div>
+            <PayFields defaultAmount={paiseToInput(prefillAmount)} upiId={settings.upiId} payeeName={settings.upiPayeeName} note={`${title} ${monthLabel(inv.periodMonth)}`.slice(0, 60)} />
           </ActionForm>
-          <p className="mt-4 text-center text-xs text-muted">Pay the owner first, then tap the button. It shows as paid once they confirm.</p>
+          <p className="mt-4 text-center text-xs text-muted">It shows as paid once the owner confirms.</p>
         </Card>
       )}
       {itemId && <p className="mt-4 text-center text-sm"><Link href="/portal/expenses" className="font-medium text-accent hover:underline">Pay a different expense</Link></p>}

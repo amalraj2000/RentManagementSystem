@@ -15,6 +15,7 @@ export async function tenantForUser(db: DB, userId: string) {
       name: users.name,
       email: users.email,
       phone: tenantProfiles.phone,
+      dateOfBirth: tenantProfiles.dateOfBirth,
       status: tenantProfiles.status,
       joiningDate: tenantProfiles.joiningDate,
       moveOutDate: tenantProfiles.moveOutDate,

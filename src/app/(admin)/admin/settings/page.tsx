@@ -28,6 +28,10 @@ export default async function SettingsPage() {
               <Select name="waterMethod" defaultValue={s.waterMethod}><option value="equal_residents">Equal – eligible residents</option><option value="custom">Custom per tenant</option></Select>
             </Field>
           </div>
+          <div className="grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
+            <Field label="UPI id (for tenants to pay)" hint="Like name@okbank. Tenants see it, and a Pay button, when they choose UPI."><Input name="upiId" maxLength={100} placeholder="name@bank" autoComplete="off" defaultValue={s.upiId} /></Field>
+            <Field label="Name shown in the UPI app" hint="Your name or the PG's name."><Input name="upiPayeeName" maxLength={60} defaultValue={s.upiPayeeName} /></Field>
+          </div>
           <Field label="House rules (shown to tenants)"><Textarea name="houseRules" rows={6} maxLength={4000} defaultValue={s.houseRules} /></Field>
           <Field label="Important contacts (shown to tenants)"><Textarea name="contactInfo" rows={4} maxLength={2000} defaultValue={s.contactInfo} /></Field>
         </ActionForm>

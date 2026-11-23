@@ -195,3 +195,19 @@ describe("which category a payment's money belongs to (reports)", () => {
     expect(allocatePayment(items, "expense", 60000, { ...z, electricity: 100000 })).toEqual({ rent: 0, electricity: 0, water: 50000, other: 10000 }); // electricity already covered by an earlier payment
   });
 });
+
+import * as Sch from "@/lib/schemas";
+describe("date of birth and UPI id validation", () => {
+  it("dob is optional, must be a real past date", () => {
+    expect(Sch.dob.parse("")).toBeNull();
+    expect(Sch.dob.parse(undefined)).toBeNull();
+    expect(Sch.dob.parse("1999-05-20")).toBe("1999-05-20");
+    expect(() => Sch.dob.parse("1850-01-01")).toThrow();
+    expect(() => Sch.dob.parse("2999-01-01")).toThrow();
+    expect(() => Sch.dob.parse("not a date")).toThrow();
+  });
+  it("accepts normal UPI ids and rejects nonsense", () => {
+    for (const ok of ["", "name@okbank", "9876543210@ybl", "first.last-1@oksbi"]) expect(Sch.upiId.safeParse(ok).success).toBe(true);
+    for (const bad of ["name", "@bank", "a b@bank", "name@"]) expect(Sch.upiId.safeParse(bad).success).toBe(false);
+  });
+});

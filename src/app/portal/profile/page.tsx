@@ -1,6 +1,7 @@
 import { ActionForm } from "@/components/action-form";
 import { Card, Field, Input, PageHeader, Badge } from "@/components/ui";
 import { changePassword } from "@/actions/auth";
+import { updateMyProfileAction } from "@/actions/portal";
 import { getDb } from "@/db/client";
 import { formatDate } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
@@ -24,9 +25,16 @@ export default async function Profile() {
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold">My details</h2>
           {me && (
+            <ActionForm action={updateMyProfileAction} submit="Save my details" reset={false} className="mb-4 space-y-3 border-b border-line pb-4">
+              <Field label="Name"><Input name="name" required minLength={2} maxLength={100} defaultValue={me.name} autoComplete="name" /></Field>
+              <Field label="Mobile number"><Input name="phone" type="tel" required defaultValue={me.phone} autoComplete="tel" /></Field>
+              <Field label="Date of birth"><Input name="dob" type="date" min="1900-01-01" max={new Date().toISOString().slice(0, 10)} defaultValue={me.dateOfBirth ?? ""} autoComplete="bday" /></Field>
+            </ActionForm>
+          )}
+          {me && (
             <dl className="space-y-2 text-sm">
               {([
-                ["Name", me.name], ["Email", me.email], ["Mobile number", me.phone],
+                ["Email", me.email],
                 ["Room", me.roomName ? `${me.roomName} · Bed ${me.bedNumber}` : "Not assigned"],
                 ["Joined", formatDate(me.joiningDate)], ["Monthly rent", formatINR(me.monthlyRentPaise)], ["Security deposit", formatINR(me.securityDepositPaise)],
                 ["Emergency contact", me.emergencyContactName ? `${me.emergencyContactName} (${me.emergencyContactPhone ?? "—"})` : "—"],
@@ -34,7 +42,7 @@ export default async function Profile() {
               <div className="flex justify-between"><dt className="text-muted">Status</dt><dd><Badge kind={me.status} /></dd></div>
             </dl>
           )}
-          <p className="mt-3 text-xs text-muted">To change these details, ask the PG owner.</p>
+          <p className="mt-3 text-xs text-muted">You can change your name, mobile number and date of birth above. To change anything else, ask the PG owner.</p>
         </Card>
         <Card className="p-5">
           <h2 className="mb-3 text-sm font-semibold">Change password</h2>

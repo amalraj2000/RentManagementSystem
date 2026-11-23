@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { ImageIcon, Plus } from "lucide-react";
+import { Eye, ImageIcon, Plus } from "lucide-react";
 import { ConfirmButton } from "@/components/action-form";
-import { Badge, buttonClass, EditLink, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
+import { Badge, buttonClass, EditLink, iconButtonClass, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
 import { approveClaimAction, rejectClaimAction, voidPaymentAction } from "@/actions/admin";
 import { Field, Input } from "@/components/ui";
 import { getDb } from "@/db/client";
@@ -11,36 +11,92 @@ import { methodLabel } from "@/lib/payment-methods";
 import { purposeLabel } from "@/lib/billing";
 import { pageParam, slicePage } from "@/lib/page";
 import { requireAdmin } from "@/lib/session";
+import { MarkPaidButton } from "@/components/mark-paid-button";
+import { RevertPaidButton } from "@/components/revert-paid-button";
+import { MonthPicker } from "@/components/month-picker";
+import { monthParam } from "@/lib/page";
+import { currentMonth, todayISO } from "@/lib/dates";
+import { paymentBoard, paymentsByTenant, unpaidItemsByTenant } from "@/services/reports";
 import { type ActivityFilter, FILTERS, filterCounts, matchesFilter, paymentActivity } from "@/services/payment-activity";
 
 export const metadata = { title: "Payments" };
 
-const TAB_LABEL: Record<ActivityFilter, string> = { all: "All", waiting: "Waiting for confirmation", paid: "Paid", cancelled: "Cancelled" };
+const TAB_LABEL: Record<ActivityFilter, string> = { all: "All payments", waiting: "Waiting for confirmation", paid: "Paid", cancelled: "Cancelled" };
 
-export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string }> }) {
+export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string; month?: string }> }) {
   await requireAdmin();
   const sp = await searchParams;
-  const show: ActivityFilter = (FILTERS as string[]).includes(sp.show ?? "") ? (sp.show as ActivityFilter) : "all"; // "All" is the default
+  const board = !sp.show || sp.show === "tenants"; // the default view: active tenants and whether they have paid
+  const show: ActivityFilter = (FILTERS as string[]).includes(sp.show ?? "") ? (sp.show as ActivityFilter) : "all";
+  const month = monthParam(sp.month);
   const all = await paymentActivity(getDb());
   const counts = filterCounts(all);
   const { items, total, page } = slicePage(all.filter((r) => matchesFilter(r, show)), pageParam(sp.page));
-  const tabHref = (f: ActivityFilter) => (f === "all" ? "/admin/payments" : `/admin/payments?show=${f}`);
+  const tabHref = (f: ActivityFilter) => `/admin/payments?show=${f}`;
+  const today = todayISO();
+  const tenants = board ? await paymentBoard(getDb(), month, today) : [];
+  const waitingBy = new Map<string, number>();
+  for (const r of all) if (r.status === "waiting") waitingBy.set(r.tenantId, (waitingBy.get(r.tenantId) ?? 0) + 1);
+  const ids = tenants.map((t) => t.tenantId); // empty when not on the tenants view, so nothing extra is fetched
+  const [unpaid, paid] = await Promise.all([unpaidItemsByTenant(getDb(), ids), paymentsByTenant(getDb(), ids, 200)]);
   return (
     <>
       <PageHeader
         title="Payments"
-        description="Payments you recorded and payments tenants say they made — all in one place."
-        actions={<Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link>}
+        description={board ? `Who has paid for ${monthLabel(month)}` : "Payments you recorded and payments tenants say they made — all in one place."}
+        actions={<>{board && <MonthPicker value={month} basePath="/admin/payments" />}<Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>}
       />
       <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter payments">
+        <Link href="/admin/payments" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Tenants</Link>
         {FILTERS.map((f) => (
-          <Link key={f} href={tabHref(f)} role="tab" aria-selected={show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
+          <Link key={f} href={tabHref(f)} role="tab" aria-selected={!board && show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${!board && show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
             {TAB_LABEL[f]}
             <span className={`rounded-full px-1.5 text-[11px] font-semibold ${f === "waiting" && counts.waiting > 0 ? "bg-red-600 text-white" : "bg-slate-100 text-slate-600"}`}>{counts[f]}</span>
           </Link>
         ))}
       </div>
-      {total === 0 ? <Empty>{show === "all" ? "No payments yet." : "Nothing here."}</Empty> : (
+      {board ? (
+        tenants.length === 0 ? <Empty>No active tenants yet.</Empty> : (
+          <Table>
+            <thead><tr><Th>Tenant</Th><Th>Rent</Th><Th>Expenses</Th><Th className="text-right">Action</Th></tr></thead>
+            <tbody>
+              {tenants.map((t) => {
+                const items = (unpaid.get(t.tenantId) ?? []).filter((i) => i.month === month);
+                const mine = (paid.get(t.tenantId) ?? []).filter((p) => p.month === month);
+                return (
+                  <tr key={t.tenantId}>
+                    <Td>
+                      <Link className="font-medium hover:underline" href={`/admin/payments/tenant/${t.tenantId}`}>{t.name}</Link>
+                      {(waitingBy.get(t.tenantId) ?? 0) > 0 && <Link href={`/admin/payments/tenant/${t.tenantId}`} className="mt-1 block text-xs font-medium text-amber-700 hover:underline">{waitingBy.get(t.tenantId)} waiting for you to confirm</Link>}
+                    </Td>
+                    <Td>
+                      {!t.rent || t.rent.state === "none" ? <span className="text-muted">{t.invoiceId ? "—" : "No bill yet"}</span> : (
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="tabular-nums">{formatINR(t.rent.amount)}</span><Badge kind={t.rent.state} /></div>
+                      )}
+                    </Td>
+                    <Td className="!whitespace-normal">
+                      {t.expenseLines.length === 0 ? <span className="text-muted">—</span> : (
+                        <ul className="space-y-1">
+                          {t.expenseLines.map((l, i) => (
+                            <li key={i} className="flex flex-wrap items-center gap-x-2 text-sm"><span>{l.label}</span><span className="tabular-nums text-muted">{formatINR(l.amount)}</span><Badge kind={l.paid ? "paid" : "unpaid"} /></li>
+                          ))}
+                        </ul>
+                      )}
+                    </Td>
+                    <Td>
+                      <RowActions>
+                        <Link href={`/admin/payments/tenant/${t.tenantId}`} title="View payments" aria-label="View payments" className={iconButtonClass()}><Eye className="size-4" aria-hidden /></Link>
+                        <MarkPaidButton name={t.name} items={items} />
+                        <RevertPaidButton name={t.name} rows={mine.map((p) => ({ id: p.id, what: `${p.what} · ${monthLabel(p.month)}`, amount: p.amount, paidOn: p.paidOn, method: p.method }))} />
+                      </RowActions>
+                    </Td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        )
+      ) : total === 0 ? <Empty>{show === "all" ? "No payments yet." : "Nothing here."}</Empty> : (
         <Table>
           <thead><tr><Th>Date</Th><Th>Tenant</Th><Th>For</Th><Th className="text-right">Amount</Th><Th>Mode</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
           <tbody>
@@ -86,7 +142,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
           </tbody>
         </Table>
       )}
-      <Pager page={page} total={total} basePath="/admin/payments" params={{ show: show === "all" ? undefined : show }} />
+      {!board && <Pager page={page} total={total} basePath="/admin/payments" params={{ show: show === "all" ? undefined : show }} />}
     </>
   );
 }

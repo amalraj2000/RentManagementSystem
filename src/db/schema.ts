@@ -49,6 +49,8 @@ export const tenantProfiles = sqliteTable(
     id: id(),
     userId: text("user_id").notNull().unique().references(() => users.id, { onDelete: "restrict" }),
     phone: text("phone").notNull(),
+    /** Date of birth (YYYY-MM-DD), optional. */
+    dateOfBirth: text("date_of_birth"),
     joiningDate: text("joining_date").notNull(),
     moveOutDate: text("move_out_date"),
     status: text("status", { enum: ["active", "notice", "moved_out"] }).notNull().default("active"),
@@ -176,6 +178,9 @@ export const rentSettings = sqliteTable(
     mapsLink: text("maps_link").notNull().default(""),
     /** JSON list of landing-page facilities the owner has switched off (see src/lib/facilities.ts). */
     hiddenFacilities: text("hidden_facilities").notNull().default("[]"),
+    /** Where tenants pay by UPI: the owner's UPI id (e.g. name@bank) and the name shown in the UPI app. */
+    upiId: text("upi_id").notNull().default(""),
+    upiPayeeName: text("upi_payee_name").notNull().default(""),
     updatedAt: updatedAt(),
   },
   (t) => [check("rent_settings_single", sql`${t.id} = 1`), check("due_day_range", sql`${t.dueDayOfMonth} between 1 and 28`)],

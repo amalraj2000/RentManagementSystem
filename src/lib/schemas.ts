@@ -3,6 +3,19 @@ import { DATE_RE, MONTH_RE } from "./dates";
 import { rupeesToPaise } from "./money";
 
 export const date = z.string().regex(DATE_RE, "Enter a valid date");
+/** Optional date of birth: empty is fine; otherwise a real date between 1900 and today. */
+export const dob = z
+  .string()
+  .trim()
+  .optional()
+  .transform((v) => v || null)
+  .refine((v) => v === null || (DATE_RE.test(v) && v >= "1900-01-01" && v <= new Date().toISOString().slice(0, 10)), "Enter a valid date of birth");
+/** Optional UPI id like name@bank. */
+export const upiId = z
+  .string()
+  .trim()
+  .max(100)
+  .refine((v) => !v || /^[\w.\-]{2,100}@[A-Za-z][A-Za-z0-9.]{1,63}$/.test(v), "Enter a valid UPI id, like name@bank");
 export const month = z.string().regex(MONTH_RE, "Enter a valid month");
 export const money = z
   .string()

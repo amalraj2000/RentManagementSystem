@@ -31,6 +31,7 @@ const tenantFields = {
   name: S.text(100).min(2, "Enter the tenant's name"),
   email: S.email,
   phone: S.phone,
+  dob: S.dob,
   joiningDate: S.date,
   monthlyRent: S.nonNegMoney,
   deposit: S.nonNegMoney,
@@ -42,6 +43,7 @@ const toInput = (d: z.infer<z.ZodObject<typeof tenantFields>>) => ({
   name: d.name,
   email: d.email,
   phone: d.phone,
+  dateOfBirth: d.dob,
   joiningDate: d.joiningDate,
   monthlyRentPaise: d.monthlyRent,
   securityDepositPaise: d.deposit,
@@ -235,6 +237,20 @@ export async function markPaidManyAction(f: FormData) {
   });
 }
 
+/** Reverts ("un-marks") payments: each ticked payment is cancelled and stops counting, but stays in the records. */
+export async function revertPaymentsAction(f: FormData) {
+  return run(async () => {
+    const me = await requireAdmin();
+    const picks = f.getAll("pay").map(String);
+    if (!picks.length) throw new AppError("Tick the payments to revert");
+    const reason = z.object({ reason: S.text(200) }).parse(fd(f)).reason.trim() || "Reverted by the owner";
+    for (const id of picks) await voidPayment(getDb(), me.id, S.id.parse(id), reason);
+    revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
+    return `Reverted ${picks.length} payment${picks.length > 1 ? "s" : ""}`;
+  });
+}
+
 export async function voidPaymentAction(paymentId: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
@@ -366,9 +382,11 @@ export async function updateSettingsAction(f: FormData) {
         waterMethod: z.enum(["equal_residents", "custom"]),
         houseRules: S.text(4000),
         contactInfo: S.text(2000),
+        upiId: S.upiId,
+        upiPayeeName: S.text(60),
       })
       .parse(fd(f));
-    await updateSettings(getDb(), me.id, { defaultRentPaise: d.defaultRent, dueDayOfMonth: d.dueDay, electricityMethod: d.electricityMethod, waterMethod: d.waterMethod, houseRules: d.houseRules, contactInfo: d.contactInfo });
+    await updateSettings(getDb(), me.id, { defaultRentPaise: d.defaultRent, dueDayOfMonth: d.dueDay, electricityMethod: d.electricityMethod, waterMethod: d.waterMethod, houseRules: d.houseRules, contactInfo: d.contactInfo, upiId: d.upiId, upiPayeeName: d.upiPayeeName });
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return "Settings saved";

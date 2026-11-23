@@ -71,7 +71,7 @@ export const listAnnouncements = (db: DB, limit = 20) =>
 export async function updateSettings(
   db: DB,
   actorId: string,
-  s: { defaultRentPaise: number; dueDayOfMonth: number; electricityMethod: "equal_residents" | "equal_beds" | "custom"; waterMethod: "equal_residents" | "custom"; houseRules: string; contactInfo: string },
+  s: { defaultRentPaise: number; dueDayOfMonth: number; electricityMethod: "equal_residents" | "equal_beds" | "custom"; waterMethod: "equal_residents" | "custom"; houseRules: string; contactInfo: string; upiId: string; upiPayeeName: string },
 ) {
   await db.update(rentSettings).set(s).where(eq(rentSettings.id, 1));
   await audit(db, actorId, "settings.update", "settings", "1", { dueDay: s.dueDayOfMonth });

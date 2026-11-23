@@ -209,6 +209,45 @@ export async function paymentsByTenant(db: DB, tenantIds: string[], perTenant = 
   return out;
 }
 
+/**
+ * The payments board: every ACTIVE tenant for one month, with RENT and each EXPENSE line and whether it is paid.
+ * Tenants with no bill that month are still listed (`invoiceId` null) so nobody is missed.
+ */
+export async function paymentBoard(db: DB, month: string, today: string) {
+  const tenants = await db
+    .select({ id: tenantProfiles.id, name: users.name })
+    .from(tenantProfiles)
+    .innerJoin(users, eq(users.id, tenantProfiles.userId))
+    .where(ne(tenantProfiles.status, "moved_out"))
+    .orderBy(asc(users.name));
+  const invs = await invoiceSplits(db, eq(invoices.periodMonth, month));
+  const byTenant = new Map(invs.map((i) => [i.tenantId, i]));
+  const items = invs.length
+    ? await db
+        .select({ id: invoiceItems.id, invoiceId: invoiceItems.invoiceId, kind: invoiceItems.kind, category: expenses.category })
+        .from(invoiceItems)
+        .leftJoin(expenses, eq(expenses.id, invoiceItems.expenseId))
+        .where(and(inArray(invoiceItems.invoiceId, invs.map((i) => i.id)), sql`${invoiceItems.kind} not in ('rent', 'adjustment')`))
+    : [];
+  const lines = await expenseLinesFor(db, invs.map((i) => i.id));
+  return tenants.map((t) => {
+    const inv = byTenant.get(t.id) ?? null;
+    const rent = inv
+      ? { amount: inv.split.rentPayable, balance: inv.split.rentBalance, state: (inv.split.rentPayable === 0 ? "none" : inv.split.rentBalance <= 0 ? "paid" : inv.split.rentCovered > 0 ? "partial" : today > inv.dueDate ? "overdue" : "unpaid") as "none" | "paid" | "partial" | "overdue" | "unpaid" }
+      : null;
+    const expenseLines = inv
+      ? items
+          .filter((i) => i.invoiceId === inv.id)
+          .flatMap((i) => {
+            const l = lines.get(inv.id)?.get(i.id);
+            if (!l) return [];
+            return [{ label: categoryLabel(i.category ?? (i.kind === "electricity" || i.kind === "water" ? i.kind : "other")), amount: l.payable, balance: l.balance, paid: l.balance <= 0 }];
+          })
+      : [];
+    return { tenantId: t.id, name: t.name, invoiceId: inv?.id ?? null, rent, expenseLines };
+  });
+}
+
 /** Who still owes — with the RENT they owe and the EXPENSES they owe kept apart. */
 export async function outstandingByTenant(db: DB) {
   const all = await invoiceSplits(db);
