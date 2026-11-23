@@ -8,7 +8,7 @@ export const MAX_SITE_PHOTOS = 12;
 
 export type WebsiteInfo = { pgName: string; tagline: string; about: string; address: string; contactPhone: string; whatsapp: string; contactEmail: string; mapsLink: string };
 
-export const DEFAULT_WEBSITE: WebsiteInfo = { pgName: "Our PG", tagline: "", about: "", address: "", contactPhone: "", whatsapp: "", contactEmail: "", mapsLink: "" };
+export const DEFAULT_WEBSITE: WebsiteInfo = { pgName: "Loveshore", tagline: "", about: "", address: "", contactPhone: "", whatsapp: "", contactEmail: "", mapsLink: "" };
 
 export async function getWebsiteInfo(db: DB): Promise<WebsiteInfo> {
   const [s] = await db

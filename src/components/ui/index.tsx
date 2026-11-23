@@ -77,7 +77,7 @@ const tones: Record<string, string> = {
   rejected: "bg-red-50 text-red-700 ring-red-200",
   voided: "bg-slate-100 text-slate-500 ring-slate-200",
 };
-const labels: Record<string, string> = { waiting: "Waiting for confirmation", pending: "Waiting", moved_out: "Vacated", partial: "Partly paid", notice: "Notice period" };
+const labels: Record<string, string> = { cancelled: "Cancelled", rejected: "Rejected", waiting: "Waiting for confirmation", pending: "Waiting", moved_out: "Vacated", partial: "Partly paid", notice: "Notice period" };
 export function Badge({ kind, wrap }: { kind: string; wrap?: boolean }) {
   return (
     <span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset", wrap ? "whitespace-normal text-center leading-tight" : "whitespace-nowrap", tones[kind] ?? tones.unpaid)}>

@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import "./globals.css";
 
-export const metadata: Metadata = { title: { default: "PG Manager", template: "%s · PG Manager" }, description: "Ladies' PG management", robots: { index: false, follow: false } };
+export const metadata: Metadata = { title: { default: "Loveshore", template: "%s · Loveshore" }, description: "Loveshore — ladies' PG: rent, bills and notices", robots: { index: false, follow: false } };
 export const viewport: Viewport = { themeColor: "#0f766e", width: "device-width", initialScale: 1 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,6 +1,6 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
-import { bedAssignments, beds, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
+import { bedAssignments, beds, invoices, payments, rooms, tenantDocuments, tenantProfiles, users } from "@/db/schema";
 import { hashPassword, passwordProblem, destroyUserSessions } from "@/lib/auth-core";
 import { AppError, audit, type Q } from "./common";
 import { saveDocumentTx, type ValidFile } from "./documents";
@@ -172,23 +172,26 @@ export async function listRoomsWithBeds(q: Q) {
       roomId: rooms.id,
       roomName: rooms.name,
       maxOccupancy: rooms.maxOccupancy,
+      bathroom: rooms.hasAttachedBathroom,
       bedId: beds.id,
       bedNumber: beds.bedNumber,
       assignmentId: bedAssignments.id,
       tenantId: tenantProfiles.id,
       tenantName: users.name,
+      photoId: tenantDocuments.id,
     })
     .from(rooms)
     .innerJoin(beds, eq(beds.roomId, rooms.id))
     .leftJoin(bedAssignments, and(eq(bedAssignments.bedId, beds.id), isNull(bedAssignments.endDate)))
     .leftJoin(tenantProfiles, eq(tenantProfiles.id, bedAssignments.tenantId))
     .leftJoin(users, eq(users.id, tenantProfiles.userId))
+    .leftJoin(tenantDocuments, and(eq(tenantDocuments.tenantId, tenantProfiles.id), eq(tenantDocuments.kind, "photo")))
     .where(isNull(rooms.archivedAt))
     .orderBy(rooms.name, beds.bedNumber);
-  const map = new Map<string, { id: string; name: string; maxOccupancy: number; beds: { id: string; number: number; tenantId: string | null; tenantName: string | null }[] }>();
+  const map = new Map<string, { id: string; name: string; maxOccupancy: number; bathroom: boolean; beds: { id: string; number: number; tenantId: string | null; tenantName: string | null; photoId: string | null }[] }>();
   for (const r of rows) {
-    if (!map.has(r.roomId)) map.set(r.roomId, { id: r.roomId, name: r.roomName, maxOccupancy: r.maxOccupancy, beds: [] });
-    map.get(r.roomId)!.beds.push({ id: r.bedId, number: r.bedNumber, tenantId: r.tenantId, tenantName: r.tenantName });
+    if (!map.has(r.roomId)) map.set(r.roomId, { id: r.roomId, name: r.roomName, maxOccupancy: r.maxOccupancy, bathroom: r.bathroom, beds: [] });
+    map.get(r.roomId)!.beds.push({ id: r.bedId, number: r.bedNumber, tenantId: r.tenantId, tenantName: r.tenantName, photoId: r.photoId });
   }
   return [...map.values()];
 }

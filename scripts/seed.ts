@@ -41,8 +41,12 @@ async function main() {
     await syncInvoices(db, admin.id, month);
   }
   const invs = await db.select().from(schema.invoices).where(eq(schema.invoices.periodMonth, addMonths(m, -1)));
-  for (const inv of invs.slice(0, 4)) await recordPayment(db, admin.id, { invoiceId: inv.id, amountPaise: inv.totalPaise, paidOn: `${addMonths(m, -1)}-04`, method: "upi", reference: "DEMO-UPI" });
-  await addExpense(db, admin.id, { category: "cleaning", amountPaise: 250000, spentOn: `${m}-03`, description: "Monthly cleaning (demo)" });
+  for (const inv of invs.slice(0, 4)) {
+    // rent and expenses are paid separately: settle the rent part of this invoice
+    const [rent] = await db.select().from(schema.invoiceItems).where(eq(schema.invoiceItems.invoiceId, inv.id)).then((r) => r.filter((i) => i.kind === "rent"));
+    await recordPayment(db, admin.id, { invoiceId: inv.id, amountPaise: rent.amountPaise, paidOn: `${addMonths(m, -1)}-04`, method: "upi", reference: "DEMO-UPI", purpose: "rent" });
+  }
+  await addExpense(db, admin.id, { category: "water", amountPaise: 250000, spentOn: `${m}-03`, description: "Monthly cleaning (demo)" });
   await postAnnouncement(db, admin.id, { title: "Welcome (demo)", body: "Demo notice. Water supply is off 10–12 on Sundays.", pinned: true });
   console.log("Seeded. Admin: admin@demo.test / DemoAdmin2026 · Tenants: tenant1@demo.test … / DemoTenant2026");
 }

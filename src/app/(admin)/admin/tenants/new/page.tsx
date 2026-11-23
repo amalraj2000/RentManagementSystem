@@ -11,7 +11,8 @@ import { listRoomsWithBeds } from "@/services/tenants";
 
 export const metadata = { title: "Add tenant" };
 
-export default async function NewTenant() {
+export default async function NewTenant({ searchParams }: { searchParams: Promise<{ bed?: string }> }) {
+  const preferredBed = (await searchParams).bed ?? "";
   const db = getDb();
   const [rooms, settings] = await Promise.all([listRoomsWithBeds(db), getSettings(db)]);
   return (
@@ -22,7 +23,7 @@ export default async function NewTenant() {
           <TenantFields defaultRentPaise={settings.defaultRentPaise} t={{ joiningDate: todayISO() }} />
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <Field label="Assign bed" hint="Only vacant beds are selectable">
-              <Select name="bedId" defaultValue="">
+              <Select name="bedId" defaultValue={rooms.some((r) => r.beds.some((b) => b.id === preferredBed && !b.tenantId)) ? preferredBed : ""}>
                 <option value="">Assign later</option>
                 {rooms.map((r) => (
                   <optgroup key={r.id} label={r.name}>

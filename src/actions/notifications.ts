@@ -35,3 +35,8 @@ export async function markAllReadAction() {
     return "All notifications marked as read";
   });
 }
+
+/** Same as openNotification, but takes the id from a form field (used by the bell's small notification box). */
+export async function openNotificationFromForm(formData: FormData) {
+  await openNotification(S.id.parse(String(formData.get("id") ?? "")));
+}

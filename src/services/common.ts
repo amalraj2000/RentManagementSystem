@@ -30,8 +30,12 @@ export async function recomputeInvoice(q: Q, invoiceId: string) {
     .from(invoiceItems)
     .where(eq(invoiceItems.invoiceId, invoiceId));
   const [p] = await q
-    .select({ paid: sql<number>`coalesce(sum(case when ${payments.voidedAt} is null then ${payments.amountPaise} else 0 end), 0)` })
+    .select({
+      paid: sql<number>`coalesce(sum(case when ${payments.voidedAt} is null then ${payments.amountPaise} else 0 end), 0)`,
+      rent: sql<number>`coalesce(sum(case when ${payments.voidedAt} is null and ${payments.purpose} = 'rent' then ${payments.amountPaise} else 0 end), 0)`,
+      expense: sql<number>`coalesce(sum(case when ${payments.voidedAt} is null and ${payments.purpose} = 'expense' then ${payments.amountPaise} else 0 end), 0)`,
+    })
     .from(payments)
     .where(eq(payments.invoiceId, invoiceId));
-  await q.update(invoices).set({ totalPaise: Number(t.total), paidPaise: Number(p.paid) }).where(eq(invoices.id, invoiceId));
+  await q.update(invoices).set({ totalPaise: Number(t.total), paidPaise: Number(p.paid), rentPaidPaise: Number(p.rent), expensePaidPaise: Number(p.expense) }).where(eq(invoices.id, invoiceId));
 }

@@ -1,6 +1,6 @@
-# PG Manager
+# Loveshore
 
-Fast, secure management for a small ladies' PG (2 bedrooms × 4 beds). Next.js 16 (App Router) · React 19 · TypeScript · Tailwind v4 · Turso (libSQL) · Drizzle ORM · Zod. Deployable on Vercel.
+**Loveshore** — fast, secure management for a small ladies' PG (2 bedrooms × 4 beds). Next.js 16 (App Router) · React 19 · TypeScript · Tailwind v4 · Turso (libSQL) · Drizzle ORM · Zod. Deployable on Vercel.
 
 - **Admin**: dashboard, tenants, rooms/beds, monthly invoices, partial/full payments + printable receipts, electricity & water bills with exact-rounding allocation, expenses, reports + CSV export, announcements, settings.
 - **Tenant portal** (mobile-first): amount due, invoice breakdown, payment history, receipts, notices, profile, house rules, change password.
@@ -24,9 +24,9 @@ Quick local trial without Turso: set `TURSO_DATABASE_URL=file:local.db` (blank t
 
 ```bash
 brew install tursodatabase/tap/turso && turso auth login
-turso db create pg-manager --location bom        # Mumbai
-turso db show pg-manager --url                   # -> TURSO_DATABASE_URL
-turso db tokens create pg-manager                # -> TURSO_AUTH_TOKEN (keep secret)
+turso db create loveshore --location bom        # Mumbai
+turso db show loveshore --url                   # -> TURSO_DATABASE_URL
+turso db tokens create loveshore                # -> TURSO_AUTH_TOKEN (keep secret)
 ```
 
 ## Deploy to Vercel
@@ -39,7 +39,7 @@ turso db tokens create pg-manager                # -> TURSO_AUTH_TOKEN (keep sec
 
 ### Safe production migration procedure
 1. Change `src/db/schema.ts` → `npm run db:generate` → review the generated SQL in `drizzle/`.
-2. Take a backup point: `turso db shell pg-manager .dump > backup.sql` (or create a Turso branch/PITR point).
+2. Take a backup point: `turso db shell loveshore .dump > backup.sql` (or create a Turso branch/PITR point).
 3. Apply to production with `npm run db:migrate` **before** deploying code that needs it. Prefer additive, backwards-compatible changes (add column/table, then deploy, then clean up later).
 4. Migrations run only when you run them — never automatically at request time.
 
@@ -61,6 +61,8 @@ Verified in this configuration: foreign keys are enforced (`PRAGMA foreign_keys 
 - **Status**: paid (balance ≤ 0) · overdue (balance > 0 and today is after the due date, even if partly paid) · partial · unpaid. A bill is due *on* its due date.
 - **Utilities**: one bill per (type, month). Allocation (equal residents / equal occupied beds [electricity] / custom) is computed once, rounded so shares sum exactly to the bill total (remainder paise go to the first tenants), and saved as a snapshot — later changes to residents never alter old bills. A utility bill auto-creates a matching expense (counted once). Meter readings are validated (closing ≥ opening). Utility bills can be deleted only if no payment exists on the affected invoices.
 - **Shared expenses**: an expense can be split equally among the tenants active in its month, or given a custom amount per tenant (custom amounts may total less than the expense; you bear the rest). Each share is saved as a snapshot and added to that tenant's invoice as an "other" charge, so it shows on their dashboard and bill. Re-running invoice generation never duplicates it. Editing/un-sharing/deleting a shared expense is blocked once a payment exists on an affected invoice (void the payment first). Tenant payments toward these charges are reported as "Other income"; the expense itself still counts as an expense.
+- **Rent and expenses are paid separately.** Every bill has a *Rent* part and an *Expenses* part (electricity, water, gas cylinder, shared and other charges). Each payment and each tenant "I've paid" report is tagged **Rent** or **Expenses**, can't exceed that part's balance, and only reduces that part. Rent and expense payments each get their own receipt, report line and dashboard figure. Discounts come off rent first. "Collect all dues since check-in" collects rent dues or expense dues, one at a time.
+- **Expense categories are fixed**: Electricity, Water, Gas cylinder. A new expense is **split equally among the active tenants by default** (or custom, or kept as your own cost); with nobody living there it simply stays your own cost.
 - **Payments** can't exceed the balance. They're never deleted: voiding keeps the row (with reason) and removes it from totals.
 - **Reports**: *cash collected* = non-voided payments by payment date, attributed to rent/electricity/water/other by a rent→electricity→water→other waterfall per invoice. *Invoiced* is shown separately and is never treated as income.
 - Rent is billed as a full month (no pro-rating for mid-month joins) — adjust with a discount line if needed.

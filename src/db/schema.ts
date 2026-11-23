@@ -189,6 +189,9 @@ export const invoices = sqliteTable(
     /** Denormalised from invoice_items / payments; maintained inside the same transaction as every write. */
     totalPaise: integer("total_paise").notNull().default(0),
     paidPaise: integer("paid_paise").notNull().default(0),
+    /** paid_paise split by what the money was FOR (rent vs expenses); always rent_paid + expense_paid = paid. Maintained with every payment change. */
+    rentPaidPaise: integer("rent_paid_paise").notNull().default(0),
+    expensePaidPaise: integer("expense_paid_paise").notNull().default(0),
     cancelledAt: integer("cancelled_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
@@ -228,6 +231,10 @@ export const payments = sqliteTable(
     id: id(),
     invoiceId: text("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),
     tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "restrict" }),
+    /** What this payment is for. Rent and expenses are paid (and tracked) separately. */
+    purpose: text("purpose", { enum: ["rent", "expense"] }).notNull().default("rent"),
+    /** For an expense payment: the one expense line (invoice item) it pays. Null = general, spread over the expense lines. No FK on purpose. */
+    invoiceItemId: text("invoice_item_id"),
     receiptNo: text("receipt_no").notNull().unique(),
     amountPaise: integer("amount_paise").notNull(),
     paidOn: text("paid_on").notNull(),
@@ -255,6 +262,9 @@ export const paymentClaims = sqliteTable(
     invoiceId: text("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),
     tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "restrict" }),
     amountPaise: integer("amount_paise").notNull(),
+    purpose: text("purpose", { enum: ["rent", "expense"] }).notNull().default("rent"),
+    /** The one expense line this report is for (null = rent / general). */
+    invoiceItemId: text("invoice_item_id"),
     paidOn: text("paid_on").notNull(),
     method: text("method", { enum: ["cash", "upi", "bank_transfer", "other"] }).notNull(),
     reference: text("reference"),
@@ -325,7 +335,7 @@ export const expenses = sqliteTable(
   {
     id: id(),
     category: text("category", {
-      enum: ["electricity", "water", "cooking_gas", "cleaning", "repairs", "internet", "other"],
+      enum: ["electricity", "water", "cooking_gas"],
     }).notNull(),
     amountPaise: integer("amount_paise").notNull(),
     spentOn: text("spent_on").notNull(),

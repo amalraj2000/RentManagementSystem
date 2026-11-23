@@ -12,7 +12,7 @@ export async function removeShares(tx: Q, expenseId: string) {
   const items = await tx.select().from(invoiceItems).where(eq(invoiceItems.expenseId, expenseId));
   if (items.length) {
     const invs = await tx.select().from(invoices).where(inArray(invoices.id, items.map((i) => i.invoiceId)));
-    if (invs.some((i) => i.paidPaise > 0)) throw new AppError("Payments were already recorded on invoices that include this shared expense. Void those payments first.", "shareMode");
+    if (invs.some((i) => i.expensePaidPaise > 0)) throw new AppError("Expense payments were already recorded on bills that include this shared expense. Cancel those payments first.", "shareMode");
     await tx.delete(invoiceItems).where(eq(invoiceItems.expenseId, expenseId));
     for (const i of invs) await recomputeInvoice(tx, i.id);
   }
@@ -37,6 +37,14 @@ export async function applyShare(tx: Q, actorId: string, exp: ExpenseRow, prev: 
   }
   const eligible = await eligibleTenants(tx, month);
   const ids = eligible.map((t) => t.id);
+  if (share.mode === "equal" && ids.length === 0) {
+    // the default is "split among active tenants" — with nobody living there, it simply stays the owner's own cost
+    if (prev && prev.shareMode !== "none") {
+      await removeShares(tx, exp.id);
+      await tx.update(expenses).set({ shareMode: "none" }).where(eq(expenses.id, exp.id));
+    }
+    return;
+  }
   let shares: { tenantId: string; amountPaise: number }[];
   try {
     if (share.mode === "equal") {

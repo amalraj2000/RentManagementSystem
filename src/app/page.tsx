@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Suspense } from "react";
 import { Armchair, Bath, BedDouble, ImageIcon, Mail, MapPin, MessageCircle, Phone, Sofa, Utensils } from "lucide-react";
+import { LogoMark } from "@/components/logo";
+import { LoginModal, LoginTrigger } from "@/components/login-modal";
+import { PoweredBy } from "@/components/powered-by";
 import { getDb } from "@/db/client";
 import { whatsappNumber } from "@/lib/share";
 import { roomSummaries } from "@/services/rooms";
@@ -41,13 +44,14 @@ export default async function Landing() {
   const hasContact = info.contactPhone || wa || info.contactEmail || info.address || info.mapsLink;
   return (
     <div className="min-h-dvh bg-white">
+      <Suspense fallback={null}><LoginModal /></Suspense>
       <header className="sticky top-0 z-30 border-b border-line bg-white/95 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
-          <span className="truncate text-base font-semibold">{info.pgName}</span>
+          <span className="flex min-w-0 items-center gap-2.5 text-base font-semibold tracking-tight"><LogoMark className="size-8" /><span className="truncate">{info.pgName}</span></span>
           <nav className="flex items-center gap-1 text-sm">
             <a href="#gallery" className="hidden rounded-lg px-3 py-2 font-medium text-slate-600 hover:bg-slate-100 sm:inline">Photos</a>
             <a href="#contact" className="hidden rounded-lg px-3 py-2 font-medium text-slate-600 hover:bg-slate-100 sm:inline">Contact</a>
-            <Link href="/login" className={`${btn} min-h-9 bg-accent px-4 text-white hover:bg-accent-hover`}>Login</Link>
+            <LoginTrigger className={`${btn} min-h-9 bg-accent px-4 text-white hover:bg-accent-hover`}>Login</LoginTrigger>
           </nav>
         </div>
       </header>
@@ -58,7 +62,7 @@ export default async function Landing() {
           <h1 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-5xl">{info.pgName}</h1>
           {info.tagline && <p className="mt-4 max-w-xl text-base text-slate-600 sm:text-lg">{info.tagline}</p>}
           <div className="mt-7 flex flex-wrap gap-3">
-            <Link href="/login" className={`${btn} bg-accent text-white hover:bg-accent-hover`}>Login</Link>
+            <LoginTrigger className={`${btn} bg-accent text-white hover:bg-accent-hover`}>Login</LoginTrigger>
             {info.contactPhone && <a href={`tel:${info.contactPhone.replace(/\s/g, "")}`} className={`${btn} border border-line bg-white hover:bg-slate-50`}><Phone className="size-4" aria-hidden /> Call us</a>}
             {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(`Hi, I'd like to know more about ${info.pgName}.`)}`} target="_blank" rel="noopener noreferrer" className={`${btn} border border-line bg-white hover:bg-slate-50`}><MessageCircle className="size-4 text-emerald-600" aria-hidden /> WhatsApp</a>}
           </div>
@@ -123,9 +127,10 @@ export default async function Landing() {
 
       <footer className="border-t border-line">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-6 text-sm text-muted sm:px-6">
-          <span>© {new Date().getFullYear()} {info.pgName}</span>
-          <Link href="/login" className="font-medium text-accent hover:underline">Resident / owner login</Link>
+          <span className="flex items-center gap-2"><LogoMark className="size-5" />© {new Date().getFullYear()} {info.pgName}</span>
+          <LoginTrigger className="font-medium text-accent hover:underline">Resident / owner login</LoginTrigger>
         </div>
+        <div className="mx-auto max-w-6xl border-t border-line/60 px-4 py-4 text-center sm:px-6"><PoweredBy /></div>
       </footer>
     </div>
   );

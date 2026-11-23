@@ -5,7 +5,7 @@ import { hashPassword, passwordProblem } from "@/lib/auth-core";
 
 /** Idempotent: 2 rooms x 4 beds + the singleton settings row. */
 export async function ensureBaseData(db: DB) {
-  await db.insert(rentSettings).values({ id: 1 }).onConflictDoNothing();
+  await db.insert(rentSettings).values({ id: 1, pgName: "Loveshore" }).onConflictDoNothing();
   for (const name of ["Bedroom 1", "Bedroom 2"]) {
     await db.insert(rooms).values({ name, maxOccupancy: 4 }).onConflictDoNothing();
     const [room] = await db.select().from(rooms).where(eq(rooms.name, name));

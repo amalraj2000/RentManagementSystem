@@ -3,13 +3,18 @@ import { ImageIcon } from "lucide-react";
 import { Badge, buttonClass, Card, Empty, PageHeader, Pager } from "@/components/ui";
 import { pageParam, slicePage } from "@/lib/page";
 import { getDb } from "@/db/client";
-import { formatDate, monthLabel } from "@/lib/dates";
+import { formatDate, formatDateShort, monthLabel, monthLabelShort } from "@/lib/dates";
+import { methodLabel } from "@/lib/payment-methods";
+import { purposeLabel } from "@/lib/billing";
 import { formatINR } from "@/lib/money";
 import { requireTenant } from "@/lib/session";
 import { myClaims } from "@/services/claims";
 import { myPayments } from "@/services/portal";
 
 export const metadata = { title: "Payments" };
+
+const th = "whitespace-nowrap border-b border-line bg-slate-50 px-1 py-2.5 text-xs font-medium text-muted sm:px-4";
+const td = "border-b border-line px-1 py-3 align-middle text-[13px] sm:px-4 sm:text-sm";
 
 export default async function PortalPayments({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   const user = await requireTenant();
@@ -21,7 +26,7 @@ export default async function PortalPayments({ searchParams }: { searchParams: P
   const reports = claims.filter((c) => c.status !== "approved"); // approved ones already appear below as real payments
   return (
     <>
-      <PageHeader title="My payments" description={pays.length ? `${pays.length} payment${pays.length > 1 ? "s" : ""} · ${formatINR(total)} paid in total` : undefined} actions={<Link href="/portal" className={buttonClass("secondary")}>Pay / report a payment</Link>} />
+      <PageHeader title="My payments" description={pays.length ? `${pays.length} payment${pays.length > 1 ? "s" : ""} · ${formatINR(total)} paid in total` : undefined} actions={<Link href="/portal/rent" className={buttonClass("secondary")}>Pay rent</Link>} />
 
       {reports.length > 0 && (
         <>
@@ -32,7 +37,7 @@ export default async function PortalPayments({ searchParams }: { searchParams: P
                 <li key={c.id} className="px-4 py-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-medium tabular-nums">{formatINR(c.amountPaise)} <span className="font-normal text-muted">· {monthLabel(c.month)}</span></p>
+                      <p className="font-medium tabular-nums">{formatINR(c.amountPaise)} <span className="font-normal text-muted">· {purposeLabel(c.purpose)} · {monthLabel(c.month)}</span></p>
                       <p className="text-xs text-muted">{formatDate(c.paidOn)} · {c.method.replace("_", " ")}{c.reference ? ` · ${c.reference}` : ""}</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -49,18 +54,35 @@ export default async function PortalPayments({ searchParams }: { searchParams: P
       )}
 
       <h2 className="mb-2 text-sm font-semibold">Payment history</h2>
-      <Card>
-        {pays.length === 0 ? <Empty>No payments recorded yet.</Empty> : (
-          <ul className="divide-y divide-line">
-            {pagePays.map((p) => (
-              <li key={p.id} className="flex items-center justify-between px-4 py-3 text-sm">
-                <div><p className="font-medium tabular-nums">{formatINR(p.amountPaise)}</p><p className="text-xs text-muted">{formatDate(p.paidOn)} · {p.method.replace("_", " ")} · for {monthLabel(p.periodMonth)}</p></div>
-                <Link href={`/receipt/${p.id}`} className="font-medium text-accent hover:underline">{p.receiptNo}</Link>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
+      {pays.length === 0 ? <Card><Empty>No payments recorded yet.</Empty></Card> : (
+        <Card className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr>
+                <th className={th}>Month</th><th className={`${th} text-right`}>Price</th><th className={th}>Date paid</th><th className={th}>Mode</th><th className={`${th} text-right`}>Receipt</th>
+              </tr>
+            </thead>
+            <tbody className="[&_tr:last-child_td]:border-b-0">
+              {pagePays.map((p) => (
+                <tr key={p.id}>
+                  <td className={`${td} whitespace-nowrap font-medium`}>
+                    <span className="sm:hidden">{monthLabelShort(p.periodMonth)}</span>
+                    <span className="hidden sm:inline">{monthLabel(p.periodMonth)}</span>
+                    <span className="block text-[11px] font-normal text-muted">{purposeLabel(p.purpose)}</span>
+                  </td>
+                  <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{formatINR(p.amountPaise)}</td>
+                  <td className={`${td} whitespace-nowrap`}>
+                    <span className="sm:hidden">{formatDateShort(p.paidOn)}</span>
+                    <span className="hidden sm:inline">{formatDate(p.paidOn)}</span>
+                  </td>
+                  <td className={`${td} whitespace-nowrap`}>{methodLabel(p.method)}</td>
+                  <td className={`${td} text-right`}><Link href={`/receipt/${p.id}`} className="font-medium text-accent hover:underline">View</Link></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
       <Pager page={current} total={payCount} basePath="/portal/payments" />
     </>
   );

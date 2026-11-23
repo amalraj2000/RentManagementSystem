@@ -1,61 +1,92 @@
 import Link from "next/link";
-import { desc, eq, sql } from "drizzle-orm";
-import { Inbox, Plus } from "lucide-react";
+import { ImageIcon, Plus } from "lucide-react";
 import { ConfirmButton } from "@/components/action-form";
 import { Badge, buttonClass, EditLink, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
-import { voidPaymentAction } from "@/actions/admin";
+import { approveClaimAction, rejectClaimAction, voidPaymentAction } from "@/actions/admin";
+import { Field, Input } from "@/components/ui";
 import { getDb } from "@/db/client";
-import { invoices, payments, tenantProfiles, users } from "@/db/schema";
 import { formatDate, monthLabel } from "@/lib/dates";
-import { formatINR } from "@/lib/money";
-import { offsetFor, PAGE_SIZE, pageParam } from "@/lib/page";
-import { pendingClaimCount } from "@/services/claims";
+import { formatINR, paiseToInput } from "@/lib/money";
+import { methodLabel } from "@/lib/payment-methods";
+import { purposeLabel } from "@/lib/billing";
+import { pageParam, slicePage } from "@/lib/page";
+import { requireAdmin } from "@/lib/session";
+import { type ActivityFilter, FILTERS, filterCounts, matchesFilter, paymentActivity } from "@/services/payment-activity";
 
 export const metadata = { title: "Payments" };
 
-export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
-  const page = pageParam((await searchParams).page);
-  const rows = await getDb()
-    .select({ id: payments.id, receiptNo: payments.receiptNo, amount: payments.amountPaise, paidOn: payments.paidOn, method: payments.method, reference: payments.reference, voidedAt: payments.voidedAt, name: users.name, month: invoices.periodMonth, invoiceId: invoices.id })
-    .from(payments)
-    .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
-    .innerJoin(tenantProfiles, eq(tenantProfiles.id, payments.tenantId))
-    .innerJoin(users, eq(users.id, tenantProfiles.userId))
-    .orderBy(desc(payments.paidOn), desc(payments.createdAt))
-    .limit(PAGE_SIZE)
-    .offset(offsetFor(page));
-  const [{ n: total }] = await getDb().select({ n: sql<number>`count(*)` }).from(payments);
-  const waiting = await pendingClaimCount(getDb());
+const TAB_LABEL: Record<ActivityFilter, string> = { all: "All", waiting: "Waiting for confirmation", paid: "Paid", cancelled: "Cancelled" };
+
+export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string }> }) {
+  await requireAdmin();
+  const sp = await searchParams;
+  const show: ActivityFilter = (FILTERS as string[]).includes(sp.show ?? "") ? (sp.show as ActivityFilter) : "all"; // "All" is the default
+  const all = await paymentActivity(getDb());
+  const counts = filterCounts(all);
+  const { items, total, page } = slicePage(all.filter((r) => matchesFilter(r, show)), pageParam(sp.page));
+  const tabHref = (f: ActivityFilter) => (f === "all" ? "/admin/payments" : `/admin/payments?show=${f}`);
   return (
     <>
-      <PageHeader title="Payments" description="Manually recorded payments — nothing here is verified by a payment gateway. Payments are voided, never deleted." actions={<><Link href="/admin/payments/claims" className={buttonClass("secondary")}><Inbox className="size-4" aria-hidden /> Reported by tenants{waiting > 0 && <span className="ml-1 rounded-full bg-red-600 px-1.5 text-[11px] font-semibold text-white">{waiting}</span>}</Link><Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>} />
-      {rows.length === 0 ? <Empty>No payments recorded yet.</Empty> : (
+      <PageHeader
+        title="Payments"
+        description="Payments you recorded and payments tenants say they made — all in one place."
+        actions={<Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link>}
+      />
+      <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter payments">
+        {FILTERS.map((f) => (
+          <Link key={f} href={tabHref(f)} role="tab" aria-selected={show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
+            {TAB_LABEL[f]}
+            <span className={`rounded-full px-1.5 text-[11px] font-semibold ${f === "waiting" && counts.waiting > 0 ? "bg-red-600 text-white" : "bg-slate-100 text-slate-600"}`}>{counts[f]}</span>
+          </Link>
+        ))}
+      </div>
+      {total === 0 ? <Empty>{show === "all" ? "No payments yet." : "Nothing here."}</Empty> : (
         <Table>
-          <thead><tr><Th>Date</Th><Th>Tenant</Th><Th>For</Th><Th className="text-right">Amount</Th><Th>Method</Th><Th>Receipt</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
+          <thead><tr><Th>Date</Th><Th>Tenant</Th><Th>For</Th><Th className="text-right">Amount</Th><Th>Mode</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
           <tbody>
-            {rows.slice(0, PAGE_SIZE).map((r) => (
-              <tr key={r.id} className={r.voidedAt ? "text-muted" : ""}>
-                <Td>{formatDate(r.paidOn)}</Td>
-                <Td>{r.name}</Td>
-                <Td><Link className="hover:underline" href={`/admin/invoices/${r.invoiceId}`}>{monthLabel(r.month)}</Link></Td>
-                <Td className={`text-right tabular-nums ${r.voidedAt ? "line-through" : ""}`}>{formatINR(r.amount)}</Td>
-                <Td>{r.method.replace("_", " ")}{r.reference ? ` · ${r.reference}` : ""}</Td>
-                <Td>{r.voidedAt ? "—" : <Link className="hover:underline" href={`/receipt/${r.id}`}>{r.receiptNo}</Link>}</Td>
-                <Td><Badge kind={r.voidedAt ? "voided" : "paid"} /></Td>
+            {items.map((r) => (
+              <tr key={r.key} className={r.status === "cancelled" || r.status === "rejected" ? "text-muted" : ""}>
+                <Td>{formatDate(r.date)}</Td>
+                <Td><Link href={`/admin/tenants/${r.tenantId}`} className="font-medium hover:underline">{r.tenantName}</Link>{r.kind === "claim" && r.note && <span className="block max-w-48 whitespace-normal text-xs font-normal text-muted">{r.note}</span>}</Td>
+                <Td><Link className="hover:underline" href={`/admin/invoices/${r.invoiceId}`}>{monthLabel(r.month)}</Link><span className="block text-xs text-muted">{purposeLabel(r.purpose)}</span></Td>
+                <Td className={`text-right tabular-nums ${r.status === "cancelled" ? "line-through" : ""}`}>{formatINR(r.amountPaise)}</Td>
+                <Td>{methodLabel(r.method)}{r.reference ? <span className="block text-xs text-muted">{r.reference}</span> : null}</Td>
                 <Td>
-                  {!r.voidedAt && (
-                    <RowActions>
-                      <EditLink href={`/admin/payments/${r.id}/edit`} />
-                      <ConfirmButton label="Void" title="Void this payment?" body="It stays in the audit trail but no longer counts as collected." withReason action={voidPaymentAction.bind(null, r.id)} confirmLabel="Void payment" />
-                    </RowActions>
-                  )}
+                  <Badge kind={r.status} wrap />
+                  {(r.status === "rejected" || r.status === "cancelled") && r.rejectReason && <span className="mt-0.5 block max-w-40 whitespace-normal text-xs text-muted">{r.rejectReason}</span>}
+                </Td>
+                <Td>
+                  <RowActions>
+                    {r.hasProof && <a href={`/api/claims/${r.id}`} target="_blank" rel="noopener" title="View screenshot" aria-label="View screenshot" className="inline-flex size-8 items-center justify-center rounded-lg border border-line bg-white text-accent hover:bg-slate-50"><ImageIcon className="size-4" aria-hidden /></a>}
+                    {r.status === "waiting" && (
+                      <>
+                        <ConfirmButton
+                          label="Approve"
+                          variant="primary"
+                          title={`Confirm ${purposeLabel(r.purpose).toLowerCase()} ${formatINR(r.amountPaise)} from ${r.tenantName}?`}
+                          body="This records a real payment and issues a receipt. Only confirm once you've seen the money arrive."
+                          confirmLabel="Confirm payment"
+                          extra={<div className="mt-3"><Field label="Amount received (₹)" hint={`Still due on this bill: ${formatINR(Math.max(r.balance, 0))}`}><Input name="amount" inputMode="decimal" required defaultValue={paiseToInput(Math.min(r.amountPaise, Math.max(r.balance, 0)))} /></Field></div>}
+                          action={approveClaimAction.bind(null, r.id)}
+                        />
+                        <ConfirmButton label="Reject" title="Reject this report?" body="The tenant is told why." withReason confirmLabel="Reject" action={rejectClaimAction.bind(null, r.id)} />
+                      </>
+                    )}
+                    {r.status === "paid" && (
+                      <>
+                        <Link href={`/receipt/${r.id}`} className="px-1 text-xs font-medium text-accent hover:underline">Receipt</Link>
+                        <EditLink href={`/admin/payments/${r.id}/edit`} />
+                        <ConfirmButton label="Void" title="Cancel this payment?" body="It stays in the records, marked cancelled, but no longer counts as money received." withReason action={voidPaymentAction.bind(null, r.id)} confirmLabel="Cancel payment" />
+                      </>
+                    )}
+                  </RowActions>
                 </Td>
               </tr>
             ))}
           </tbody>
         </Table>
       )}
-      <Pager page={page} total={Number(total)} basePath="/admin/payments" />
+      <Pager page={page} total={total} basePath="/admin/payments" params={{ show: show === "all" ? undefined : show }} />
     </>
   );
 }

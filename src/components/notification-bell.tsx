@@ -1,15 +1,18 @@
-import Link from "next/link";
-import { Bell } from "lucide-react";
 import { getDb } from "@/db/client";
-import { unreadCount } from "@/services/notifications";
+import { listNotifications, unreadCount } from "@/services/notifications";
+import { NotificationMenu } from "@/components/notification-menu";
 
-/** Server component: one cheap indexed count per page view. */
+const when = (d: Date) => d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" });
+
+/** Server side: fetches the count and the latest few notifications, then hands them to the small popover. */
 export async function NotificationBell({ userId, href }: { userId: string; href: string }) {
-  const n = await unreadCount(getDb(), userId);
+  const db = getDb();
+  const [n, latest] = await Promise.all([unreadCount(db, userId), listNotifications(db, userId, 6, 0)]);
   return (
-    <Link href={href} aria-label={n ? `Notifications, ${n} unread` : "Notifications"} title="Notifications" className="relative inline-flex size-9 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100">
-      <Bell className="size-5" aria-hidden />
-      {n > 0 && <span className="absolute -right-0.5 -top-0.5 grid min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-semibold leading-4 text-white">{n > 9 ? "9+" : n}</span>}
-    </Link>
+    <NotificationMenu
+      unread={n}
+      allHref={href}
+      items={latest.map((x) => ({ id: x.id, title: x.title, body: x.body, read: !!x.readAt, when: when(x.createdAt) }))}
+    />
   );
 }

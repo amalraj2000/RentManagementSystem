@@ -1,10 +1,10 @@
 import { FileInput } from "@/components/file-input";
 import { Field, Input, Select } from "@/components/ui";
 import { paiseToInput } from "@/lib/money";
-import { CATEGORY_LABEL, EXPENSE_CATEGORIES } from "@/lib/categories";
+import { CATEGORY_LABEL, EXPENSE_CATEGORIES, type ExpenseCategory } from "@/lib/categories";
 import { todayISO } from "@/lib/dates";
 
-export function ExpenseFields({ e, expenseId, receipt, tenants = [], shareMode = "none", shares = {} }: { tenants?: { id: string; name: string }[]; shareMode?: string; shares?: Record<string, number>; expenseId?: string; receipt?: { fileName: string; sizeBytes: number } | null; e?: { category: string; amountPaise: number; spentOn: string; description: string; receiptRef: string | null } }) {
+export function ExpenseFields({ e, expenseId, receipt, tenants = [], shareMode = "equal", shares = {} }: { tenants?: { id: string; name: string }[]; shareMode?: string; shares?: Record<string, number>; expenseId?: string; receipt?: { fileName: string; sizeBytes: number } | null; e?: { category: string; amountPaise: number; spentOn: string; description: string; receiptRef: string | null } }) {
   return (
     <div className="space-y-3">
       <Field label="Category">
@@ -14,12 +14,12 @@ export function ExpenseFields({ e, expenseId, receipt, tenants = [], shareMode =
       </Field>
       <Field label="Amount (₹)"><Input name="amount" inputMode="decimal" required defaultValue={e ? paiseToInput(e.amountPaise) : ""} /></Field>
       <Field label="Date"><Input name="spentOn" type="date" required defaultValue={e?.spentOn ?? todayISO()} /></Field>
-      <Field label="Description"><Input name="description" required minLength={2} maxLength={200} defaultValue={e?.description} /></Field>
+      <Field label="Description (optional)" hint="Leave empty to use just the category name."><Input name="description" maxLength={200} defaultValue={e && e.description === CATEGORY_LABEL[e.category as ExpenseCategory] ? "" : e?.description} /></Field>
       <div className="rounded-lg border border-line bg-slate-50/60 p-3">
-        <Field label="Share with tenants" hint="For electricity, water, cleaning etc. Shared amounts are added to each tenant's bill and appear on their dashboard.">
+        <Field label="Share with tenants" hint="By default the expense is split equally among the tenants living here now, and each share is added to their bill under Expenses.">
           <Select name="shareMode" defaultValue={shareMode}>
+            <option value="equal">Split equally among active tenants ({tenants.length}) — default</option>
             <option value="none">Don&apos;t share — this is my own cost</option>
-            <option value="equal">Split equally among active tenants ({tenants.length})</option>
             <option value="custom">Custom amount for each tenant</option>
           </Select>
         </Field>

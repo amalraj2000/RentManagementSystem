@@ -49,7 +49,7 @@ export type SessionUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>
 
 export async function requireUser(): Promise<SessionUser> {
   const u = await getCurrentUser();
-  if (!u) redirect("/login");
+  if (!u) redirect("/?login=1");
   return u;
 }
 

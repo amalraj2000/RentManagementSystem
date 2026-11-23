@@ -2,7 +2,8 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-
 import type { DB } from "@/db/client";
 import { bedAssignments, expenses, invoiceItems, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
 import { addMonths, monthEnd, monthStart } from "@/lib/dates";
-import { waterfall, type Cat } from "@/lib/billing";
+import { expenseLinesFor } from "./expense-lines";
+import { allocatePayment, splitRentExpense, type Cat } from "@/lib/billing";
 
 const outstandingExpr = sql<number>`coalesce(sum(max(${invoices.totalPaise} - ${invoices.paidPaise}, 0)), 0)`;
 
@@ -52,6 +53,7 @@ export async function dashboardData(db: DB, month: string, today: string) {
     rentCollected: Number(collected[0].n),
     pendingThisMonth: Number(pendingMonth[0].n),
     outstandingTotal: Number(outstandingAll[0].n),
+    split: await rentVsExpenses(db, month),
     electricity: utilities.find((u) => u.type === "electricity") ? Number(utilities.find((u) => u.type === "electricity")!.total) : null,
     water: utilities.find((u) => u.type === "water") ? Number(utilities.find((u) => u.type === "water")!.total) : null,
     expenses: Number(spent[0].n),
@@ -59,6 +61,55 @@ export async function dashboardData(db: DB, month: string, today: string) {
     upcoming,
     owing,
   };
+}
+
+/** For the bills of one month: how much is RENT and how much is EXPENSES (utilities, shared, other), billed / collected / pending. */
+export async function rentVsExpenses(db: DB, month: string) {
+  const rows = await db
+    .select({
+      id: invoices.id,
+      rentPaid: invoices.rentPaidPaise,
+      expensePaid: invoices.expensePaidPaise,
+      rent: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'rent' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      other: sql<number>`coalesce(sum(case when ${invoiceItems.kind} not in ('rent', 'adjustment') then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      adjustment: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'adjustment' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+    })
+    .from(invoices)
+    .leftJoin(invoiceItems, eq(invoiceItems.invoiceId, invoices.id))
+    .where(and(eq(invoices.periodMonth, month), isNull(invoices.cancelledAt)))
+    .groupBy(invoices.id);
+  const t = { rentBilled: 0, rentCollected: 0, rentPending: 0, expenseBilled: 0, expenseCollected: 0, expensePending: 0 };
+  for (const r of rows) {
+    const s = splitRentExpense({ rent: Number(r.rent), other: Number(r.other), adjustment: Number(r.adjustment) }, { rent: r.rentPaid, expense: r.expensePaid });
+    t.rentBilled += s.rentPayable;
+    t.rentCollected += s.rentCovered;
+    t.rentPending += s.rentBalance;
+    t.expenseBilled += s.expensePayable;
+    t.expenseCollected += s.expenseCovered;
+    t.expensePending += s.expenseBalance;
+  }
+  return t;
+}
+
+/** This month's EXPENSES split by what they are for (electricity, water, gas cylinder, other): what tenants were charged, have paid, still owe. */
+export async function expenseByCategory(db: DB, month: string) {
+  const rows = await db
+    .select({ itemId: invoiceItems.id, invoiceId: invoices.id, kind: invoiceItems.kind, category: expenses.category })
+    .from(invoiceItems)
+    .innerJoin(invoices, eq(invoices.id, invoiceItems.invoiceId))
+    .leftJoin(expenses, eq(expenses.id, invoiceItems.expenseId))
+    .where(and(eq(invoices.periodMonth, month), isNull(invoices.cancelledAt), sql`${invoiceItems.kind} not in ('rent', 'adjustment')`));
+  const lines = await expenseLinesFor(db, [...new Set(rows.map((r) => r.invoiceId))]);
+  const out: Record<string, { billed: number; collected: number; pending: number }> = { electricity: { billed: 0, collected: 0, pending: 0 }, water: { billed: 0, collected: 0, pending: 0 }, cooking_gas: { billed: 0, collected: 0, pending: 0 }, other: { billed: 0, collected: 0, pending: 0 } };
+  for (const r of rows) {
+    const l = lines.get(r.invoiceId)?.get(r.itemId);
+    if (!l) continue;
+    const key = r.category === "electricity" || r.kind === "electricity" ? "electricity" : r.category === "water" || r.kind === "water" ? "water" : r.category === "cooking_gas" ? "cooking_gas" : "other";
+    out[key].billed += l.payable;
+    out[key].collected += l.covered;
+    out[key].pending += l.balance;
+  }
+  return out;
 }
 
 export async function outstandingByTenant(db: DB) {
@@ -91,7 +142,7 @@ export type MonthRow = {
 
 /**
  * Month-wise summary. `collected` is CASH actually received (by payment date, voided excluded),
- * attributed to categories via a rent->electricity->water->other waterfall per invoice.
+ * attributed to Rent or to the expense lines (electricity, water, other) according to what each payment was FOR.
  * `invoiced` is billed amount by invoice period and is NOT income.
  */
 export async function monthlySummary(db: DB, fromMonth: string, toMonth: string): Promise<MonthRow[]> {
@@ -137,12 +188,14 @@ export async function monthlySummary(db: DB, fromMonth: string, toMonth: string)
     ]);
     const itemsBy = new Map<string, typeof items>();
     for (const i of items) itemsBy.set(i.invoiceId, [...(itemsBy.get(i.invoiceId) ?? []), i]);
+    // earlier payments of the SAME purpose on the same bill have already taken part of its lines
     const used = new Map<string, Record<Cat, number>>();
     for (const p of allPays) {
-      const u = used.get(p.invoiceId) ?? { rent: 0, electricity: 0, water: 0, other: 0 };
-      const split = waterfall(itemsBy.get(p.invoiceId) ?? [], p.amountPaise, u);
+      const k = `${p.invoiceId}:${p.purpose}`;
+      const u = used.get(k) ?? { rent: 0, electricity: 0, water: 0, other: 0 };
+      const split = allocatePayment(itemsBy.get(p.invoiceId) ?? [], p.purpose, p.amountPaise, u);
       for (const c of Object.keys(split) as Cat[]) u[c] += split[c];
-      used.set(p.invoiceId, u);
+      used.set(k, u);
       const row = rows.get(p.paidOn.slice(0, 7));
       if (row) {
         for (const c of Object.keys(split) as Cat[]) row.collected[c] += split[c];

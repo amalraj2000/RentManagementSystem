@@ -46,3 +46,10 @@ export function monthLabelShort(month: string): string {
   const [y, m] = month.split("-").map(Number);
   return `${new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-IN", { month: "short", timeZone: "UTC" })} ’${String(y).slice(2)}`;
 }
+
+/** "05 Nov ’26" — short date for narrow screens. */
+export function formatDateShort(d: string | null | undefined): string {
+  if (!d) return "—";
+  const [y, m, day] = d.split("-").map(Number);
+  return `${new Date(Date.UTC(y, m - 1, day)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" })} ’${String(y).slice(2)}`;
+}

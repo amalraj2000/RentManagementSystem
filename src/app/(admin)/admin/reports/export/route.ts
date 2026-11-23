@@ -5,6 +5,7 @@ import { getCurrentUser } from "@/lib/session";
 import { monthEnd, monthStart, MONTH_RE } from "@/lib/dates";
 import { monthlySummary } from "@/services/reports";
 import { categoryLabel } from "@/lib/categories";
+import { purposeLabel } from "@/lib/billing";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export async function GET(req: Request) {
   const [[sum], pays, exps, invs] = await Promise.all([
     monthlySummary(db, month, month),
     db
-      .select({ date: payments.paidOn, name: users.name, amount: payments.amountPaise, method: payments.method, ref: payments.reference, receipt: payments.receiptNo, period: invoices.periodMonth })
+      .select({ purpose: payments.purpose, date: payments.paidOn, name: users.name, amount: payments.amountPaise, method: payments.method, ref: payments.reference, receipt: payments.receiptNo, period: invoices.periodMonth })
       .from(payments)
       .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
       .innerJoin(tenantProfiles, eq(tenantProfiles.id, payments.tenantId))
@@ -58,8 +59,8 @@ export async function GET(req: Request) {
     ["INVOICES"], ["Tenant", "Total", "Paid", "Balance", "Due date"],
     ...invs.map((i) => [i.name, rupees(i.total), rupees(i.paid), rupees(Math.max(i.total - i.paid, 0)), i.due]),
     [],
-    ["PAYMENTS RECEIVED"], ["Date", "Tenant", "For month", "Amount", "Method", "Reference", "Receipt"],
-    ...pays.map((p) => [p.date, p.name, p.period, rupees(p.amount), p.method, p.ref ?? "", p.receipt]),
+    ["PAYMENTS RECEIVED"], ["Date", "Tenant", "For month", "Paid for", "Amount", "Method", "Reference", "Receipt"],
+    ...pays.map((p) => [p.date, p.name, p.period, purposeLabel(p.purpose), rupees(p.amount), p.method, p.ref ?? "", p.receipt]),
     [],
     ["EXPENSES"], ["Date", "Category", "Description", "Amount", "Receipt ref"],
     ...exps.map((e) => [e.spentOn, categoryLabel(e.category), e.description, rupees(e.amountPaise), e.receiptRef ?? ""]),

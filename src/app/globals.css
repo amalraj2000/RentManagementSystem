@@ -37,6 +37,15 @@
 .dog-paw:nth-child(3) { animation-delay: 0.8s; }
 .dog-paw:nth-child(4) { animation-delay: 1.2s; }
 .dog-bubble { animation: dog-float 3.2s ease-in-out infinite; }
+.dog-mouth { transform-box: fill-box; transform-origin: 50% 0%; transform: scaleY(0); }
+.dog-woof { opacity: 0; transform-box: fill-box; transform-origin: 50% 50%; }
+.barking .dog-mouth { animation: dog-mouth 0.2s ease-in-out 0s 6 alternate; }
+.barking .dog-head { animation: dog-bark 0.3s ease-in-out 0s 4; }
+.barking .dog-woof { animation: dog-woof 1.2s ease-out 1; }
+.barking .dog-tail { animation-duration: 0.18s; }
+@keyframes dog-mouth { from { transform: scaleY(0.1); } to { transform: scaleY(1); } }
+@keyframes dog-bark { 0%, 100% { transform: translateY(0) rotate(0); } 40% { transform: translateY(-5px) rotate(-5deg); } }
+@keyframes dog-woof { 0% { opacity: 0; transform: translate(10px, 8px) scale(0.6); } 20% { opacity: 1; transform: translate(0, 0) scale(1.15); } 70% { opacity: 1; } 100% { opacity: 0; transform: translate(-8px, -6px) scale(1); } }
 @keyframes dog-wag { from { transform: rotate(-22deg); } to { transform: rotate(26deg); } }
 @keyframes dog-ear-l { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-9deg); } }
 @keyframes dog-ear-r { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(9deg); } }
@@ -48,6 +57,7 @@
 @keyframes dog-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
 @media (prefers-reduced-motion: reduce) {
   .dog *, .dog-paw, .dog-bubble { animation: none !important; }
+  .barking .dog-woof { opacity: 1; animation: none !important; }
   .dog-paw { opacity: 0.4; }
 }
 

@@ -37,7 +37,7 @@ export async function logout() {
   const me = await getCurrentUser();
   if (me) await audit(getDb(), me.id, "auth.logout", "user", me.id);
   await endSession();
-  redirect("/login");
+  redirect("/");
 }
 
 const pwSchema = z.object({ current: z.string().min(1).max(200), next: z.string().max(200), confirm: z.string().max(200) });

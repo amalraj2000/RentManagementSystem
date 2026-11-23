@@ -25,7 +25,7 @@ export default async function PortalLayout({ children }: { children: React.React
   const me = await tenantForUser(getDb(), user.id);
   const photoId = me ? await photoIdFor(getDb(), me.id) : null;
   return (
-    <AppShell items={items} brand="My PG" bell={<NotificationBell userId={user.id} href="/portal/notifications" />} userMenu={<UserMenu name={user.name} email={user.email} roleLabel="Tenant" photoId={photoId} profileHref="/portal/profile" logoutAction={logout} />}>
+    <AppShell items={items} bell={<NotificationBell userId={user.id} href="/portal/notifications" />} userMenu={<UserMenu name={user.name} email={user.email} roleLabel="Tenant" photoId={photoId} profileHref="/portal/profile" logoutAction={logout} />}>
       {user.impersonatedBy && (
         <div role="status" className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
           <span className="flex items-center gap-2"><Eye className="size-4 shrink-0" aria-hidden /> You are viewing as <strong>{user.name}</strong> (admin view). Changes are turned off.</span>

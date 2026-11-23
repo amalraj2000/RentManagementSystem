@@ -2,7 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { announcements, expenseReceipts, expenses, rentSettings } from "@/db/schema";
 import type { ValidFile } from "./documents";
-import type { ExpenseCategory } from "@/lib/categories";
+import { categoryLabel, type ExpenseCategory } from "@/lib/categories";
 import type { Q } from "./common";
 import { applyShare, removeShares, type ShareInput } from "./expense-shares";
 import { notifyAllTenants } from "./notifications";
@@ -16,9 +16,10 @@ async function saveReceipt(q: Q, expenseId: string, f: ValidFile) {
 export async function addExpense(
   db: DB,
   actorId: string,
-  e: { category: ExpenseCategory; amountPaise: number; spentOn: string; description: string; receiptRef?: string | null; receipt?: ValidFile | null; share?: ShareInput },
+  e: { category: ExpenseCategory; amountPaise: number; spentOn: string; description?: string; receiptRef?: string | null; receipt?: ValidFile | null; share?: ShareInput },
 ) {
-  const { receipt, share, ...fields } = e;
+  const { receipt, share, ...rest } = e;
+  const fields = { ...rest, description: rest.description?.trim() || categoryLabel(rest.category) };
   return db.transaction(async (tx) => {
     const [row] = await tx.insert(expenses).values({ ...fields, receiptRef: fields.receiptRef || null, createdBy: actorId }).returning({ id: expenses.id });
     if (receipt) await saveReceipt(tx, row.id, receipt);
@@ -80,9 +81,10 @@ export async function updateExpense(
   db: DB,
   actorId: string,
   id: string,
-  e: { category: ExpenseCategory; amountPaise: number; spentOn: string; description: string; receiptRef?: string | null; receipt?: ValidFile | null; removeReceipt?: boolean; share?: ShareInput },
+  e: { category: ExpenseCategory; amountPaise: number; spentOn: string; description?: string; receiptRef?: string | null; receipt?: ValidFile | null; removeReceipt?: boolean; share?: ShareInput },
 ) {
-  const { receipt, removeReceipt, share, ...fields } = e;
+  const { receipt, removeReceipt, share, ...rest } = e;
+  const fields = { ...rest, description: rest.description?.trim() || categoryLabel(rest.category) };
   const [cur] = await db.select().from(expenses).where(eq(expenses.id, id));
   if (!cur) throw new AppError("Expense not found");
   if (cur.utilityBillId) throw new AppError("This expense belongs to a utility bill. Edit the bill instead.");

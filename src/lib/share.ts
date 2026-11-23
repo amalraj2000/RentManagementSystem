@@ -16,7 +16,7 @@ export function whatsappNumber(phone: string, defaultCountry = "91") {
 }
 
 export function loginMessage(o: { name: string; url: string; email: string; password: string }) {
-  return `Hi ${o.name}, here is your PG login.\n\nLogin link: ${o.url}\nUsername: ${o.email}\nTemporary password: ${o.password}\n\nPlease login and change your password right away. Don't share this message.`;
+  return `Hi ${o.name}, here is your Loveshore login.\n\nLogin link: ${o.url}\nUsername: ${o.email}\nTemporary password: ${o.password}\n\nPlease login and change your password right away. Don't share this message.`;
 }
 
 export function whatsappLink(phone: string, text: string) {

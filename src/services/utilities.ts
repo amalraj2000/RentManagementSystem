@@ -90,7 +90,7 @@ export async function deleteUtilityBill(db: DB, actorId: string, billId: string)
     if (!bill) throw new AppError("Bill not found");
     const items = await tx.select().from(invoiceItems).where(eq(invoiceItems.utilityBillId, billId));
     const invs = items.length ? await tx.select().from(invoices).where(inArray(invoices.id, items.map((i) => i.invoiceId))) : [];
-    if (invs.some((i) => i.paidPaise > 0)) throw new AppError("Payments exist on invoices containing this bill. Void them first.");
+    if (invs.some((i) => i.expensePaidPaise > 0)) throw new AppError("Expense payments exist on bills containing this bill. Cancel them first.");
     await tx.delete(invoiceItems).where(eq(invoiceItems.utilityBillId, billId));
     for (const i of invs) await recomputeInvoice(tx, i.id);
     await tx.delete(expenses).where(eq(expenses.utilityBillId, billId));

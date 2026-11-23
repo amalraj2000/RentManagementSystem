@@ -6,7 +6,6 @@ import { monthLabel, monthLabelShort, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { pageParam, slicePage } from "@/lib/page";
 import { requireTenant } from "@/lib/session";
-import { myClaims } from "@/services/claims";
 import { mySharedItems } from "@/services/portal";
 
 export const metadata = { title: "Expenses" };
@@ -18,10 +17,9 @@ export default async function PortalExpenses({ searchParams }: { searchParams: P
   const user = await requireTenant();
   const page = pageParam((await searchParams).page);
   const db = getDb();
-  const [items, claims] = await Promise.all([mySharedItems(db, user.id), myClaims(db, user.id, 100)]);
+  const items = await mySharedItems(db, user.id);
   const { items: rows, total, page: current } = slicePage(items, page);
   const today = todayISO();
-  const pendingOn = (invoiceId: string) => claims.filter((c) => c.invoiceId === invoiceId && c.status === "pending").reduce((a, c) => a + c.amountPaise, 0);
   return (
     <>
       <PageHeader title="Expenses" description="Your share of shared expenses and utility bills" />
@@ -33,10 +31,10 @@ export default async function PortalExpenses({ searchParams }: { searchParams: P
             </thead>
             <tbody className="[&_tr:last-child_td]:border-b-0">
               {rows.map((i) => {
-                const pending = pendingOn(i.invoiceId);
+                // each expense is its own line: only reports made for THIS expense count here
                 // Paid · Waiting for confirmation · Overdue · Partly paid · Unpaid
-                const state = i.status === "paid" ? "paid" : pending >= i.invoiceBalance ? "waiting" : today > i.dueDate ? "overdue" : i.status === "partial" ? "partial" : "unpaid";
-                const claimable = Math.min(i.balance, Math.max(i.invoiceBalance - pending, 0));
+                const state = i.status === "paid" ? "paid" : i.pending >= i.balance && i.balance > 0 ? "waiting" : today > i.dueDate ? "overdue" : i.status === "partial" ? "partial" : "unpaid";
+                const claimable = Math.max(i.balance - i.pending, 0);
                 return (
                   <tr key={i.itemId}>
                     <td className={`${td} whitespace-nowrap font-medium`}>
@@ -45,14 +43,14 @@ export default async function PortalExpenses({ searchParams }: { searchParams: P
                     </td>
                     <td className={td}>
                       <p className="font-medium leading-tight">{categoryLabel(i.category)}</p>
-                      <p className="mt-0.5 hidden text-[11px] leading-tight text-muted sm:block">{i.description.replace(/^[^:–]+[:–]\s*/, "")}</p>
+                      {(() => { const detail = i.description.replace(/^[^:–]+[:–]\s*/, ""); return detail && detail !== categoryLabel(i.category) && detail !== i.description ? <p className="mt-0.5 hidden text-[11px] leading-tight text-muted sm:block">{detail}</p> : null; })()}
                     </td>
                     <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{formatINR(i.amountPaise)}</td>
                     <td className={td}><Badge kind={state} wrap /></td>
                     <td className={`${td} text-right`}>
                       {state !== "paid" && claimable > 0 ? (
                         <Link
-                          href={`/portal/invoices/${i.invoiceId}/pay?${new URLSearchParams({ amount: String(claimable), note: `For: ${i.description}`.slice(0, 100) })}`}
+                          href={`/portal/invoices/${i.invoiceId}/pay?${new URLSearchParams({ for: "expense", item: i.itemId, amount: String(claimable) })}`}
                           className="inline-flex h-8 items-center justify-center rounded-lg bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hover sm:px-3"
                         >Pay</Link>
                       ) : <span className="text-muted">—</span>}

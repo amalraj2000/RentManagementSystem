@@ -19,8 +19,9 @@ import { addSitePhoto, deleteSitePhoto, updateWebsiteInfo } from "@/services/web
 import { whatsappNumber } from "@/lib/share";
 import { generateTempPassword, loginMessage, whatsappLink } from "@/lib/share";
 import { headers } from "next/headers";
-import { eq } from "drizzle-orm";
-import { tenantProfiles, users } from "@/db/schema";
+import { eq, sql } from "drizzle-orm";
+import { beds, tenantProfiles, users } from "@/db/schema";
+import { ROOM_ADD_DELETE_ENABLED } from "@/lib/features";
 import { deleteDocument, uploadDocument, validateFile } from "@/services/documents";
 import { AppError } from "@/services/common";
 import { createUtilityBill, deleteUtilityBill, updateUtilityDetails } from "@/services/utilities";
@@ -164,6 +165,7 @@ export async function recordPaymentAction(f: FormData) {
     const d = z
       .object({
         invoiceId: S.id,
+        purpose: z.enum(["rent", "expense"]).default("rent"),
         amount: S.positiveMoney,
         paidOn: S.date,
         method: z.enum(["cash", "upi", "bank_transfer", "other"]),
@@ -171,7 +173,7 @@ export async function recordPaymentAction(f: FormData) {
         note: S.optText(200),
       })
       .parse(fd(f));
-    const r = await recordPayment(getDb(), me.id, { invoiceId: d.invoiceId, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
+    const r = await recordPayment(getDb(), me.id, { invoiceId: d.invoiceId, purpose: d.purpose, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
     revalidatePath("/admin", "layout");
     return `Payment recorded · receipt ${r.receiptNo}`;
   });
@@ -249,9 +251,9 @@ const expenseShape = z.object({
   category: z.enum(EXPENSE_CATEGORIES),
   amount: S.positiveMoney,
   spentOn: S.date,
-  description: S.text(200).min(2, "Add a short description"),
+  description: S.text(200),
   receiptRef: S.optText(300),
-  shareMode: z.enum(["none", "equal", "custom"]).default("none"),
+  shareMode: z.enum(["none", "equal", "custom"]).default("equal"), // default: split among the active tenants
 });
 
 export async function addExpenseAction(f: FormData) {
@@ -436,6 +438,7 @@ const roomShape = z.object({
 
 export async function createRoomAction(f: FormData) {
   return run(async () => {
+    if (!ROOM_ADD_DELETE_ENABLED) throw new AppError("Adding rooms is switched off.");
     const me = await requireAdmin();
     const d = roomShape.parse(fd(f));
     await createRoom(getDb(), me.id, { name: d.name, bedCount: d.bedCount, hasAttachedBathroom: d.bathroom === "on" });
@@ -448,6 +451,11 @@ export async function updateRoomAction(id: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
     const d = roomShape.parse(fd(f));
+    if (!ROOM_ADD_DELETE_ENABLED) {
+      // beds can not be added or removed: whatever was posted, keep the room's current number of beds
+      const [{ n }] = await getDb().select({ n: sql<number>`count(*)` }).from(beds).where(eq(beds.roomId, S.id.parse(id)));
+      d.bedCount = Number(n);
+    }
     await updateRoom(getDb(), me.id, S.id.parse(id), { name: d.name, bedCount: d.bedCount, hasAttachedBathroom: d.bathroom === "on" });
     revalidatePath("/admin", "layout");
     return "Room updated";
@@ -456,6 +464,7 @@ export async function updateRoomAction(id: string, f: FormData) {
 
 export async function deleteRoomAction(id: string) {
   return run(async () => {
+    if (!ROOM_ADD_DELETE_ENABLED) throw new AppError("Deleting rooms is switched off.");
     const me = await requireAdmin();
     const r = await deleteRoom(getDb(), me.id, S.id.parse(id));
     revalidatePath("/admin", "layout");
@@ -566,9 +575,9 @@ export async function collectDuesAction(tenantId: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
     const d = z
-      .object({ amount: z.string().optional().transform((v, ctx) => { if (!v?.trim()) return null; try { return S.money.parse(v); } catch { ctx.addIssue({ code: "custom", message: "Enter a valid amount, like 1500 or 1500.50" }); return z.NEVER; } }), paidOn: S.date, method: z.enum(["cash", "upi", "bank_transfer", "other"]), reference: S.optText(100), note: S.optText(200) })
+      .object({ purpose: z.enum(["rent", "expense"]).default("rent"), amount: z.string().optional().transform((v, ctx) => { if (!v?.trim()) return null; try { return S.money.parse(v); } catch { ctx.addIssue({ code: "custom", message: "Enter a valid amount, like 1500 or 1500.50" }); return z.NEVER; } }), paidOn: S.date, method: z.enum(["cash", "upi", "bank_transfer", "other"]), reference: S.optText(100), note: S.optText(200) })
       .parse(fd(f));
-    const r = await collectDues(getDb(), me.id, { tenantId: S.id.parse(tenantId), amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
+    const r = await collectDues(getDb(), me.id, { tenantId: S.id.parse(tenantId), purpose: d.purpose, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return `Collected ${formatINR(r.collected)} across ${r.payments.length} month${r.payments.length > 1 ? "s" : ""}${r.remaining > 0 ? ` · ${formatINR(r.remaining)} still due` : " · all clear"}`;

@@ -57,33 +57,8 @@ export function unitsFromReadings(opening?: number | null, closing?: number | nu
   return closing - opening;
 }
 
-/**
- * Split a tenant's payments across invoice item categories (waterfall:
- * rent -> electricity -> water -> other). Adjustments reduce rent.
- * Used for reports so cash collected is attributed to real categories.
- */
+/** The categories a payment can be reported under: rent, or one of the expense lines. */
 export type Cat = "rent" | "electricity" | "water" | "other";
-export function waterfall(
-  items: { kind: string; amountPaise: number }[],
-  paymentAmount: number,
-  alreadyAllocated: Record<Cat, number>,
-): Record<Cat, number> {
-  const net: Record<Cat, number> = { rent: 0, electricity: 0, water: 0, other: 0 };
-  for (const it of items) {
-    if (it.kind === "adjustment") net.rent += it.amountPaise;
-    else net[it.kind as Cat] += it.amountPaise;
-  }
-  const out: Record<Cat, number> = { rent: 0, electricity: 0, water: 0, other: 0 };
-  let left = paymentAmount;
-  for (const c of ["rent", "electricity", "water", "other"] as Cat[]) {
-    const room = Math.max(net[c] - alreadyAllocated[c], 0);
-    const take = Math.min(room, left);
-    out[c] = take;
-    left -= take;
-  }
-  out.rent += left; // overpayment / negative-net edge cases fall to rent
-  return out;
-}
 
 /**
  * Shows how much of an invoice's PAID amount covers each line, so a tenant can see which items are settled.
@@ -105,6 +80,30 @@ export function itemSettlement<T extends { id: string; kind: string; amountPaise
     out.set(it.id, { payable, covered, status: covered >= payable ? "paid" : covered > 0 ? "partial" : "unpaid" });
   }
   return out;
+}
+
+/**
+ * Per-expense settlement. Each expense line (electricity / water / gas cylinder / other) is paid on its own:
+ * a payment made FOR a line covers only that line (`paidByItem`). Payments not tied to a line (`generalPaid`, e.g. the owner
+ * recorded one lump sum) are spread over whatever is still unpaid, in the usual order. `discount` = what is left of a discount after rent.
+ */
+export function expenseLineSettlement<T extends { id: string; kind: string; amountPaise: number }>(items: T[], paidByItem: Record<string, number>, generalPaid: number, discount = 0) {
+  const order = ["electricity", "water", "other"];
+  const lines = items.filter((i) => i.kind !== "rent" && i.amountPaise > 0).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+  let off = Math.max(discount, 0);
+  const rows = lines.map((it) => {
+    const cut = Math.min(it.amountPaise, off);
+    off -= cut;
+    const payable = it.amountPaise - cut;
+    return { id: it.id, payable, covered: Math.min(payable, Math.max(paidByItem[it.id] ?? 0, 0)) };
+  });
+  let left = Math.max(generalPaid, 0);
+  for (const r of rows) {
+    const take = Math.min(r.payable - r.covered, left);
+    r.covered += take;
+    left -= take;
+  }
+  return new Map(rows.map((r) => [r.id, { payable: r.payable, covered: r.covered, balance: r.payable - r.covered, status: (r.covered >= r.payable ? "paid" : r.covered > 0 ? "partial" : "unpaid") as "paid" | "partial" | "unpaid" }]));
 }
 
 /** Every month from `from` to `to` inclusive (YYYY-MM), newest first. */
@@ -132,4 +131,59 @@ export function rentState(inv: { totalPaise: number; paidPaise: number; dueDate:
   if (pendingPaise >= balance) return "waiting";
   const s = invoiceStatus(inv, today);
   return s === "overdue" ? "overdue" : s === "partial" ? "partial" : "unpaid";
+}
+
+export type Purpose = "rent" | "expense";
+export const PURPOSE_LABEL: Record<Purpose, string> = { rent: "Rent", expense: "Expenses" };
+export const purposeLabel = (p: string) => PURPOSE_LABEL[p as Purpose] ?? "Rent";
+
+/**
+ * Splits one bill into RENT and EXPENSES (electricity, water, gas cylinder, other charges) and says how much of each is paid.
+ * Rent and expenses are PAID SEPARATELY: `paid.rent` is what was paid toward rent, `paid.expense` toward expenses.
+ * Discounts come off rent first. `pending` = payments the tenant reported but the owner hasn't confirmed, per purpose.
+ */
+export function splitRentExpense(
+  parts: { rent: number; other: number; adjustment: number },
+  paid: { rent: number; expense: number },
+  pending: { rent: number; expense: number } = { rent: 0, expense: 0 },
+) {
+  let discount = Math.max(-parts.adjustment, 0);
+  const rentOff = Math.min(parts.rent, discount);
+  discount -= rentOff;
+  const rentPayable = parts.rent - rentOff;
+  const expensePayable = Math.max(parts.other - discount, 0);
+  const rentCovered = Math.min(rentPayable, Math.max(paid.rent, 0));
+  const expenseCovered = Math.min(expensePayable, Math.max(paid.expense, 0));
+  const rentBalance = rentPayable - rentCovered;
+  const expenseBalance = expensePayable - expenseCovered;
+  const pendingRent = Math.min(Math.max(pending.rent, 0), rentBalance);
+  const pendingExpense = Math.min(Math.max(pending.expense, 0), expenseBalance);
+  return { rentPayable, rentCovered, rentBalance, pendingRent, expensePayable, expenseCovered, expenseBalance, pendingExpense };
+}
+
+/**
+ * For reports: which categories a payment's money belongs to. A RENT payment is all rent; an EXPENSE payment is spread over the
+ * expense lines in order (electricity → water → other). `alreadyAllocated` is what earlier payments of the same purpose took.
+ */
+export function allocatePayment(
+  items: { kind: string; amountPaise: number }[],
+  purpose: Purpose,
+  amount: number,
+  alreadyAllocated: Record<Cat, number>,
+): Record<Cat, number> {
+  const out: Record<Cat, number> = { rent: 0, electricity: 0, water: 0, other: 0 };
+  if (purpose === "rent") {
+    out.rent = amount;
+    return out;
+  }
+  const net: Record<"electricity" | "water" | "other", number> = { electricity: 0, water: 0, other: 0 };
+  for (const it of items) if (it.kind === "electricity" || it.kind === "water" || it.kind === "other") net[it.kind] += it.amountPaise;
+  let left = amount;
+  for (const c of ["electricity", "water", "other"] as const) {
+    const take = Math.min(Math.max(net[c] - alreadyAllocated[c], 0), left);
+    out[c] = take;
+    left -= take;
+  }
+  out.other += left; // anything beyond the lines (e.g. a discount applied later) stays under expenses
+  return out;
 }

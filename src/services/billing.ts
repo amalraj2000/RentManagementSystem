@@ -3,9 +3,11 @@ import type { DB } from "@/db/client";
 import { bedAssignments, expenseAllocations, expenses, invoiceItems, invoices, payments, rentSettings, tenantProfiles, users, utilityAllocations, utilityBills } from "@/db/schema";
 import { dueDateFor, formatDate, monthEnd, monthLabel, monthStart } from "@/lib/dates";
 import { AppError, audit, recomputeInvoice, type Q } from "./common";
+import { purposeLabel, splitRentExpense, type Purpose } from "@/lib/billing";
 import { notifyAdmins, notifyTenant, tenantName } from "./notifications";
 import { formatINR } from "@/lib/money";
-import { categoryLabel } from "@/lib/categories";
+import { expenseLine } from "@/lib/categories";
+import { expenseLinesFor } from "./expense-lines";
 
 export async function getSettings(q: Q) {
   const [s] = await q.select().from(rentSettings).where(eq(rentSettings.id, 1));
@@ -105,11 +107,11 @@ export async function syncInvoicesTx(tx: Q, actorId: string | null, month: strin
       await tx.insert(invoiceItems).values({
         invoiceId: inv.id,
         kind: "other",
-        description: `${categoryLabel(a.category)}: ${a.description}`,
+        description: expenseLine(a.category, a.description),
         amountPaise: a.amount,
         expenseId: a.expenseId,
       });
-      added.push({ key: a.expenseId, label: `${categoryLabel(a.category)}: ${a.description}`, amount: a.amount });
+      added.push({ key: a.expenseId, label: expenseLine(a.category, a.description), amount: a.amount });
       changed = true;
     }
     if (changed || !items.length) {
@@ -130,6 +132,22 @@ export async function syncInvoicesTx(tx: Q, actorId: string | null, month: strin
 }
 
 /** Adds an extra charge (positive) or a discount/adjustment (negative) with a mandatory description/reason. */
+/** Rent / expense totals and paid amounts of one bill (what the tenant and admin screens show side by side). */
+export async function invoiceBuckets(q: Q, invoiceId: string, extra = { rent: 0, other: 0, adjustment: 0 }, pending = { rent: 0, expense: 0 }) {
+  const [inv] = await q.select().from(invoices).where(eq(invoices.id, invoiceId));
+  if (!inv) throw new AppError("Invoice not found");
+  const [s] = await q
+    .select({
+      rent: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'rent' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      other: sql<number>`coalesce(sum(case when ${invoiceItems.kind} not in ('rent', 'adjustment') then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      adjustment: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'adjustment' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+    })
+    .from(invoiceItems)
+    .where(eq(invoiceItems.invoiceId, invoiceId));
+  const parts = { rent: Number(s.rent) + extra.rent, other: Number(s.other) + extra.other, adjustment: Number(s.adjustment) + extra.adjustment };
+  return { inv, ...splitRentExpense(parts, { rent: inv.rentPaidPaise, expense: inv.expensePaidPaise }, pending) };
+}
+
 export async function addInvoiceItem(
   db: DB,
   actorId: string,
@@ -145,7 +163,9 @@ export async function addInvoiceItem(
   await db.transaction(async (tx) => {
     const [inv] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId));
     if (!inv) throw new AppError("Invoice not found");
-    if (inv.totalPaise + signed < inv.paidPaise) throw new AppError("Discount would make the total less than what is already paid", "amount");
+    // A discount may not push rent or expenses below what was already paid toward them.
+    const after = await invoiceBuckets(tx, invoiceId, { rent: 0, other: kind === "other" ? signed : 0, adjustment: kind === "adjustment" ? signed : 0 });
+    if (after.rentPayable < inv.rentPaidPaise || after.expensePayable < inv.expensePaidPaise) throw new AppError("Discount would make the total less than what is already paid", "amount");
     await tx.insert(invoiceItems).values({ invoiceId, kind, description: description.trim(), amountPaise: signed });
     await recomputeInvoice(tx, invoiceId);
     await audit(tx, actorId, `invoice.${kind}`, "invoice", invoiceId, { description, amountPaise: signed });
@@ -156,7 +176,7 @@ function receiptNo(date: string) {
   return `R${date.replaceAll("-", "")}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 }
 
-type PaymentInput = { invoiceId: string; amountPaise: number; paidOn: string; method: "cash" | "upi" | "bank_transfer" | "other"; reference?: string | null; note?: string | null };
+type PaymentInput = { invoiceId: string; /** Pays just this one expense line (purpose "expense"). */ invoiceItemId?: string | null; /** Rent and expenses are paid separately. Defaults to rent. */ purpose?: Purpose; amountPaise: number; paidOn: string; method: "cash" | "upi" | "bank_transfer" | "other"; reference?: string | null; note?: string | null };
 
 export async function recordPayment(db: DB, actorId: string, p: PaymentInput) {
   return db.transaction(async (tx) => recordPaymentTx(tx, actorId, p));
@@ -166,14 +186,28 @@ export async function recordPaymentTx(tx: Q, actorId: string, p: PaymentInput) {
   if (!Number.isInteger(p.amountPaise) || p.amountPaise <= 0) throw new AppError("Amount must be greater than zero", "amount");
     const [inv] = await tx.select().from(invoices).where(eq(invoices.id, p.invoiceId));
   if (!inv) throw new AppError("Invoice not found");
-  const balance = inv.totalPaise - inv.paidPaise;
-  if (balance <= 0) throw new AppError("This invoice is already fully paid");
-  if (p.amountPaise > balance) throw new AppError("Payment exceeds the outstanding balance", "amount");
+  const purpose: Purpose = p.purpose ?? "rent";
+  const label = purposeLabel(purpose).toLowerCase();
+  const b = await invoiceBuckets(tx, inv.id);
+  const balance = purpose === "rent" ? b.rentBalance : b.expenseBalance;
+  if (balance <= 0) throw new AppError(`The ${label} on this bill is already fully paid`, "amount");
+  if (p.amountPaise > balance) throw new AppError(`Payment exceeds the outstanding ${label} balance (${formatINR(balance)})`, "amount");
+  let itemId: string | null = null;
+  if (purpose === "expense" && p.invoiceItemId) {
+    // Paying ONE expense: it can only cover that expense, never another.
+    const line = (await expenseLinesFor(tx, [inv.id])).get(inv.id)?.get(p.invoiceItemId);
+    if (!line) throw new AppError("That expense is not on this bill", "amount");
+    if (line.balance <= 0) throw new AppError("That expense is already fully paid", "amount");
+    if (p.amountPaise > line.balance) throw new AppError(`This expense has only ${formatINR(line.balance)} left to pay`, "amount");
+    itemId = p.invoiceItemId;
+  }
   const [row] = await tx
     .insert(payments)
     .values({
       invoiceId: inv.id,
       tenantId: inv.tenantId,
+      purpose,
+      invoiceItemId: itemId,
       amountPaise: p.amountPaise,
       paidOn: p.paidOn,
       method: p.method,
@@ -184,10 +218,10 @@ export async function recordPaymentTx(tx: Q, actorId: string, p: PaymentInput) {
     })
     .returning({ id: payments.id, receiptNo: payments.receiptNo });
   await recomputeInvoice(tx, inv.id);
-  await audit(tx, actorId, "payment.record", "payment", row.id, { invoiceId: inv.id, amount: p.amountPaise, method: p.method });
+  await audit(tx, actorId, "payment.record", "payment", row.id, { invoiceId: inv.id, amount: p.amountPaise, method: p.method, purpose });
   const who = await tenantName(tx, inv.tenantId);
-  await notifyTenant(tx, inv.tenantId, { type: "payment_received", title: "Payment received", body: `${formatINR(p.amountPaise)} received on ${formatDate(p.paidOn)} (${p.method.replace("_", " ")}). Receipt ${row.receiptNo}.`, href: `/receipt/${row.id}`, dedupeKey: `pay:${row.id}` });
-  await notifyAdmins(tx, { type: "payment_recorded", title: `Payment recorded: ${who}`, body: `${formatINR(p.amountPaise)} on ${formatDate(p.paidOn)} · receipt ${row.receiptNo}.`, href: `/admin/invoices/${inv.id}`, dedupeKey: `pay:${row.id}` }, actorId);
+  await notifyTenant(tx, inv.tenantId, { type: "payment_received", title: `${purposeLabel(purpose)} payment received`, body: `${formatINR(p.amountPaise)} received on ${formatDate(p.paidOn)} (${p.method.replace("_", " ")}). Receipt ${row.receiptNo}.`, href: `/receipt/${row.id}`, dedupeKey: `pay:${row.id}` });
+  await notifyAdmins(tx, { type: "payment_recorded", title: `Payment recorded: ${who}`, body: `${purposeLabel(purpose)} · ${formatINR(p.amountPaise)} on ${formatDate(p.paidOn)} · receipt ${row.receiptNo}.`, href: `/admin/invoices/${inv.id}`, dedupeKey: `pay:${row.id}` }, actorId);
   return row;
 }
 
@@ -260,4 +294,32 @@ export async function deleteInvoice(db: DB, actorId: string, id: string) {
     await tx.delete(invoices).where(eq(invoices.id, id));
     await audit(tx, actorId, "invoice.delete", "invoice", id, { month: inv.periodMonth, tenantId: inv.tenantId });
   });
+}
+
+/** Bills that still have something unpaid — with the RENT and EXPENSES balances kept apart. For the "record payment" screen. */
+export async function openBills(db: DB) {
+  const rows = await db
+    .select({
+      id: invoices.id,
+      name: users.name,
+      month: invoices.periodMonth,
+      rentPaid: invoices.rentPaidPaise,
+      expensePaid: invoices.expensePaidPaise,
+      rent: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'rent' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      other: sql<number>`coalesce(sum(case when ${invoiceItems.kind} not in ('rent', 'adjustment') then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      adjustment: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'adjustment' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+    })
+    .from(invoices)
+    .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
+    .innerJoin(users, eq(users.id, tenantProfiles.userId))
+    .leftJoin(invoiceItems, eq(invoiceItems.invoiceId, invoices.id))
+    .where(isNull(invoices.cancelledAt))
+    .groupBy(invoices.id)
+    .orderBy(asc(users.name), asc(invoices.periodMonth));
+  return rows
+    .map((r) => {
+      const s = splitRentExpense({ rent: Number(r.rent), other: Number(r.other), adjustment: Number(r.adjustment) }, { rent: r.rentPaid, expense: r.expensePaid });
+      return { id: r.id, name: r.name, month: r.month, rentBalance: s.rentBalance, expenseBalance: s.expenseBalance };
+    })
+    .filter((r) => r.rentBalance > 0 || r.expenseBalance > 0);
 }

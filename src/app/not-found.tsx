@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { BarkingDog } from "@/components/barking-dog";
+import { Brand } from "@/components/logo";
 import { buttonClass } from "@/components/ui";
 
 export const metadata: Metadata = { title: "Page not found" };
@@ -9,7 +11,9 @@ export default function NotFound() {
   return (
     <main className="grid min-h-dvh place-items-center bg-canvas px-4 py-10">
       <div className="w-full max-w-md text-center">
-        <div className="dog relative mx-auto w-72 max-w-full" role="img" aria-label="A friendly dog wagging its tail, looking for the missing page">
+        <Brand className="mb-4 justify-center text-base" markClassName="size-8" />
+        <BarkingDog>
+        <div className="dog relative mx-auto w-72 max-w-full" role="img" aria-label="Rocky, a friendly dog wagging his tail and barking, looking for the missing page">
           <svg viewBox="0 0 300 230" className="w-full" aria-hidden="true">
             {/* ground + paw prints that fade in one after another */}
             <ellipse className="dog-shadow" cx="150" cy="205" rx="82" ry="9" fill="#0f172a" opacity="0.12" />
@@ -57,7 +61,14 @@ export default function NotFound() {
               <ellipse cx="150" cy="96" rx="9" ry="6.5" fill="#1e293b" />
               <ellipse cx="147.5" cy="94" rx="2.6" ry="1.6" fill="#64748b" />
               <path d="M150 102 L150 108 M150 108 Q141 116 134 110 M150 108 Q159 116 166 110" stroke="#1e293b" strokeWidth="2.6" fill="none" strokeLinecap="round" />
+              <ellipse className="dog-mouth" cx="150" cy="111" rx="14" ry="11" fill="#7f1d1d" />
               <path className="dog-tongue" d="M144 112 Q150 132 156 112 Z" fill="#f472b6" />
+            </g>
+
+            {/* WOOF! pops up when Rocky barks */}
+            <g className="dog-woof" fontWeight="800" fontFamily="system-ui, sans-serif" fill="#0f766e">
+              <text x="40" y="52" fontSize="22" transform="rotate(-14 40 52)">WOOF!</text>
+              <text x="52" y="84" fontSize="15" transform="rotate(-6 52 84)">woof!</text>
             </g>
 
             {/* "?" bubble */}
@@ -69,13 +80,14 @@ export default function NotFound() {
             </g>
           </svg>
         </div>
+        </BarkingDog>
 
         <p className="mt-2 text-6xl font-semibold tracking-tight text-accent sm:text-7xl" aria-hidden="true">404</p>
         <h1 className="mt-1 text-xl font-semibold">Page not found</h1>
-        <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Our dog sniffed everywhere but couldn&apos;t find this page. It may have moved, or the link might be wrong.</p>
+        <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Rocky sniffed everywhere but couldn&apos;t find this page. It may have moved, or the link might be wrong.</p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link href="/" className={buttonClass()}>Take me home</Link>
-          <Link href="/login" className={buttonClass("secondary")}>Login</Link>
+          <Link href="/?login=1" className={buttonClass("secondary")}>Login</Link>
         </div>
       </div>
     </main>

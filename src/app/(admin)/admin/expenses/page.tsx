@@ -33,7 +33,7 @@ export default async function ExpensesPage({ searchParams }: { searchParams: Pro
               <tr key={e.id}>
                 <Td>{formatDate(e.spentOn)}</Td>
                 <Td>{categoryLabel(e.category)}</Td>
-                <Td className="!whitespace-normal">{e.description}{e.receiptRef && <span className="block text-xs text-muted">Ref: {e.receiptRef}</span>}</Td>
+                <Td className="!whitespace-normal">{e.description === categoryLabel(e.category) ? <span className="text-muted">—</span> : e.description}{e.receiptRef && <span className="block text-xs text-muted">Ref: {e.receiptRef}</span>}</Td>
                 <Td>{e.hasImage ? <a href={`/api/receipts/${e.id}`} target="_blank" rel="noopener" title="View receipt image" aria-label="View receipt image" className="inline-flex text-accent hover:text-accent-hover"><ImageIcon className="size-4" aria-hidden /></a> : <span className="text-muted">—</span>}</Td>
                 <Td className="text-muted">{e.utilityBillId ? "Utility bill" : e.shareMode === "none" ? "—" : `${e.shareMode === "equal" ? "Equal" : "Custom"} · ${counts.get(e.id)?.n ?? 0} tenants · ${formatINR(Number(counts.get(e.id)?.total ?? 0))}`}</Td>
                 <Td className="text-right tabular-nums">{formatINR(e.amountPaise)}</Td>

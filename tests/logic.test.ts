@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allocateUtility, invoiceStatus, unitsFromReadings, waterfall } from "@/lib/billing";
+import { allocateUtility, invoiceStatus, unitsFromReadings } from "@/lib/billing";
 import { formatINR, rupeesToPaise, splitEqually } from "@/lib/money";
 import { dueDateFor, monthEnd } from "@/lib/dates";
 import { passwordProblem } from "@/lib/auth-core";
@@ -66,11 +66,6 @@ describe("invoice status & dates", () => {
     expect(monthEnd("2026-02")).toBe("2026-02-28");
     expect(monthEnd("2028-02")).toBe("2028-02-29");
     expect(dueDateFor("2026-03", 31)).toBe("2026-03-28");
-  });
-  it("waterfall attributes cash to categories", () => {
-    const items = [{ kind: "rent", amountPaise: 600 }, { kind: "electricity", amountPaise: 200 }, { kind: "adjustment", amountPaise: -100 }];
-    const z = { rent: 0, electricity: 0, water: 0, other: 0 };
-    expect(waterfall(items, 550, z)).toMatchObject({ rent: 500, electricity: 50 });
   });
 });
 
@@ -163,5 +158,40 @@ describe("pagination helper", () => {
     expect(slicePage(rows, 99)).toMatchObject({ page: 3, items: [21, 22, 23] }); // past the end -> last page
     expect(slicePage([], 5)).toMatchObject({ total: 0, page: 1, items: [] });
     expect(slicePage(rows.slice(0, 10), 1).total).toBe(10); // exactly one page: the pager stays hidden
+  });
+});
+
+import { splitRentExpense } from "@/lib/billing";
+
+describe("rent vs expenses split of a bill", () => {
+  const parts = { rent: 500000, other: 220761, adjustment: 0 };
+  const none = { rent: 0, expense: 0 };
+  it("tracks rent and expenses separately: paying one never touches the other", () => {
+    expect(splitRentExpense(parts, none)).toMatchObject({ rentPayable: 500000, rentBalance: 500000, expensePayable: 220761, expenseBalance: 220761 });
+    // 1,000 paid toward EXPENSES does not reduce rent at all
+    expect(splitRentExpense(parts, { rent: 0, expense: 100000 })).toMatchObject({ rentBalance: 500000, expenseCovered: 100000, expenseBalance: 120761 });
+    expect(splitRentExpense(parts, { rent: 500000, expense: 0 })).toMatchObject({ rentBalance: 0, expenseBalance: 220761 });
+    expect(splitRentExpense(parts, { rent: 500000, expense: 220761 })).toMatchObject({ rentBalance: 0, expenseBalance: 0 });
+  });
+  it("discounts come off rent first; paid amounts never exceed what is payable", () => {
+    expect(splitRentExpense({ ...parts, adjustment: -50000 }, none)).toMatchObject({ rentPayable: 450000, expensePayable: 220761 });
+    expect(splitRentExpense({ rent: 10000, other: 50000, adjustment: -30000 }, none)).toMatchObject({ rentPayable: 0, expensePayable: 30000 }); // a big discount spills into expenses
+    expect(splitRentExpense(parts, { rent: 999999999, expense: 999999999 })).toMatchObject({ rentCovered: 500000, rentBalance: 0, expenseCovered: 220761, expenseBalance: 0 });
+  });
+  it("reported-but-unconfirmed payments are counted per purpose and never exceed the balance", () => {
+    expect(splitRentExpense(parts, none, { rent: 300000, expense: 0 })).toMatchObject({ pendingRent: 300000, pendingExpense: 0 });
+    expect(splitRentExpense(parts, none, { rent: 600000, expense: 50000 })).toMatchObject({ pendingRent: 500000, pendingExpense: 50000 });
+    expect(splitRentExpense(parts, { rent: 500000, expense: 0 }, { rent: 999999999, expense: 999999999 })).toMatchObject({ pendingRent: 0, pendingExpense: 220761 });
+  });
+});
+
+import { allocatePayment } from "@/lib/billing";
+describe("which category a payment's money belongs to (reports)", () => {
+  const items = [{ kind: "rent", amountPaise: 500000 }, { kind: "electricity", amountPaise: 100000 }, { kind: "water", amountPaise: 50000 }, { kind: "other", amountPaise: 20000 }];
+  const z = { rent: 0, electricity: 0, water: 0, other: 0 };
+  it("a rent payment is all rent; an expense payment is spread over the expense lines in order", () => {
+    expect(allocatePayment(items, "rent", 300000, z)).toEqual({ rent: 300000, electricity: 0, water: 0, other: 0 });
+    expect(allocatePayment(items, "expense", 120000, z)).toEqual({ rent: 0, electricity: 100000, water: 20000, other: 0 });
+    expect(allocatePayment(items, "expense", 60000, { ...z, electricity: 100000 })).toEqual({ rent: 0, electricity: 0, water: 50000, other: 10000 }); // electricity already covered by an earlier payment
   });
 });

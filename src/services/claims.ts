@@ -1,23 +1,24 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { invoices, paymentClaims, tenantProfiles, users } from "@/db/schema";
-import { balanceOf } from "@/lib/billing";
+import { purposeLabel, type Purpose } from "@/lib/billing";
 import { monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { AppError, audit, type Q } from "./common";
 import type { ValidFile } from "./documents";
 import { notifyAdmins, notifyTenant, tenantName } from "./notifications";
-import { recordPaymentTx } from "./billing";
+import { invoiceBuckets, recordPaymentTx } from "./billing";
+import { expenseLinesFor } from "./expense-lines";
 import { tenantForUser } from "./portal";
 
 export const MAX_PENDING_CLAIMS = 5;
 type Method = "cash" | "upi" | "bank_transfer" | "other";
 
-const pendingFor = async (q: Q, invoiceId: string) => {
+const pendingFor = async (q: Q, invoiceId: string, purpose: Purpose) => {
   const [r] = await q
     .select({ n: sql<number>`coalesce(sum(${paymentClaims.amountPaise}), 0)`, c: sql<number>`count(*)` })
     .from(paymentClaims)
-    .where(and(eq(paymentClaims.invoiceId, invoiceId), eq(paymentClaims.status, "pending")));
+    .where(and(eq(paymentClaims.invoiceId, invoiceId), eq(paymentClaims.status, "pending"), eq(paymentClaims.purpose, purpose)));
   return { amount: Number(r.n), count: Number(r.c) };
 };
 
@@ -28,7 +29,7 @@ const pendingFor = async (q: Q, invoiceId: string) => {
 export async function createClaim(
   db: DB,
   userId: string,
-  c: { invoiceId: string; amountPaise: number; paidOn: string; method: Method; reference?: string | null; note?: string | null; screenshot?: ValidFile | null },
+  c: { invoiceId: string; /** Rent and expenses are reported (and paid) separately. Defaults to rent. */ purpose?: Purpose; /** The one expense being paid (required for expenses: each is paid on its own). */ invoiceItemId?: string | null; amountPaise: number; paidOn: string; method: Method; reference?: string | null; note?: string | null; screenshot?: ValidFile | null },
   today = todayISO(),
 ) {
   const me = await tenantForUser(db, userId);
@@ -38,18 +39,33 @@ export async function createClaim(
   return db.transaction(async (tx) => {
     const [inv] = await tx.select().from(invoices).where(and(eq(invoices.id, c.invoiceId), eq(invoices.tenantId, me.id))); // someone else's invoice == not found
     if (!inv || inv.cancelledAt) throw new AppError("Bill not found");
-    const balance = balanceOf(inv);
-    if (balance <= 0) throw new AppError("This bill is already fully paid");
-    const pending = await pendingFor(tx, inv.id);
+    const purpose: Purpose = c.purpose ?? "rent";
+    const word = purposeLabel(purpose).toLowerCase();
+    const b = await invoiceBuckets(tx, inv.id);
+    const balance = purpose === "rent" ? b.rentBalance : b.expenseBalance; // only what is still unpaid FOR THIS PURPOSE
+    if (balance <= 0) throw new AppError(`The ${word} on this bill is already fully paid`);
+    const pending = await pendingFor(tx, inv.id, purpose);
     if (pending.count >= MAX_PENDING_CLAIMS) throw new AppError("You already have several payment reports waiting for the owner to confirm.");
     const claimable = balance - pending.amount;
     if (claimable <= 0) throw new AppError("Your earlier payment report already covers the full balance and is waiting to be confirmed.", "amount");
+    let itemId: string | null = null;
+    if (purpose === "expense") {
+      if (!c.invoiceItemId) throw new AppError("Choose which expense you paid, from the Expenses list.");
+      const line = (await expenseLinesFor(tx, [inv.id])).get(inv.id)?.get(c.invoiceItemId);
+      if (!line) throw new AppError("That expense is not on this bill");
+      const room = line.balance - line.pending;
+      if (room <= 0) throw new AppError(line.balance <= 0 ? "That expense is already paid." : "Your earlier report for this expense is waiting to be confirmed.", "amount");
+      if (c.amountPaise > room) throw new AppError(`This expense has only ${formatINR(room)} left to pay.`, "amount");
+      itemId = c.invoiceItemId;
+    }
     if (c.amountPaise > claimable) throw new AppError(`You can report at most ${formatINR(claimable)} for this bill${pending.amount ? " (other reports are waiting for confirmation)" : ""}.`, "amount");
     const [row] = await tx
       .insert(paymentClaims)
       .values({
         invoiceId: inv.id,
         tenantId: me.id,
+        purpose,
+        invoiceItemId: itemId,
         amountPaise: c.amountPaise,
         paidOn: c.paidOn,
         method: c.method,
@@ -60,8 +76,8 @@ export async function createClaim(
         screenshotName: c.screenshot?.fileName ?? null,
       })
       .returning({ id: paymentClaims.id });
-    await audit(tx, userId, "claim.create", "payment_claim", row.id, { invoiceId: inv.id, amount: c.amountPaise, method: c.method, screenshot: !!c.screenshot });
-    await notifyAdmins(tx, { type: "claim_submitted", title: `${me.name} reported a payment`, body: `${formatINR(c.amountPaise)} via ${c.method.replace("_", " ")} for ${monthLabel(inv.periodMonth)}${c.screenshot ? " · screenshot attached" : ""}. Please verify.`, href: "/admin/payments/claims", dedupeKey: `claim:${row.id}` });
+    await audit(tx, userId, "claim.create", "payment_claim", row.id, { invoiceId: inv.id, amount: c.amountPaise, method: c.method, purpose, screenshot: !!c.screenshot });
+    await notifyAdmins(tx, { type: "claim_submitted", title: `${me.name} reported a payment`, body: `${purposeLabel(purpose)} · ${formatINR(c.amountPaise)} via ${c.method.replace("_", " ")} for ${monthLabel(inv.periodMonth)}${c.screenshot ? " · screenshot attached" : ""}. Please verify.`, href: "/admin/payments?show=waiting", dedupeKey: `claim:${row.id}` });
     return row.id;
   });
 }
@@ -70,6 +86,8 @@ const claimCols = {
   id: paymentClaims.id,
   invoiceId: paymentClaims.invoiceId,
   amountPaise: paymentClaims.amountPaise,
+  purpose: paymentClaims.purpose,
+  invoiceItemId: paymentClaims.invoiceItemId,
   paidOn: paymentClaims.paidOn,
   method: paymentClaims.method,
   reference: paymentClaims.reference,
@@ -122,6 +140,8 @@ export async function approveClaim(db: DB, adminId: string, claimId: string, amo
     const amount = amountPaise ?? c.amountPaise;
     const pay = await recordPaymentTx(tx, adminId, {
       invoiceId: c.invoiceId,
+      purpose: c.purpose,
+      invoiceItemId: c.invoiceItemId,
       amountPaise: amount,
       paidOn: c.paidOn,
       method: c.method,
@@ -142,9 +162,9 @@ export async function rejectClaim(db: DB, adminId: string, claimId: string, reas
     if (c.status !== "pending") throw new AppError("This report was already reviewed");
     await tx.update(paymentClaims).set({ status: "rejected", rejectReason: reason.trim(), reviewedBy: adminId, reviewedAt: new Date() }).where(eq(paymentClaims.id, claimId));
     await audit(tx, adminId, "claim.reject", "payment_claim", claimId, { reason });
-    await notifyTenant(tx, c.tenantId, { type: "claim_rejected", title: "Payment report not accepted", body: `Your report of ${formatINR(c.amountPaise)} could not be confirmed. Reason: ${reason.trim()}`, href: "/portal/payments", dedupeKey: `claimrej:${claimId}` });
+    await notifyTenant(tx, c.tenantId, { type: "claim_rejected", title: "Payment report not accepted", body: `Your ${purposeLabel(c.purpose).toLowerCase()} report of ${formatINR(c.amountPaise)} could not be confirmed. Reason: ${reason.trim()}`, href: "/portal/payments", dedupeKey: `claimrej:${claimId}` });
     const who = await tenantName(tx, c.tenantId);
-    await notifyAdmins(tx, { type: "claim_rejected", title: `Report rejected: ${who}`, body: `${formatINR(c.amountPaise)} · ${reason.trim()}`, href: "/admin/payments/claims", dedupeKey: `claimrej:${claimId}` }, adminId);
+    await notifyAdmins(tx, { type: "claim_rejected", title: `Report rejected: ${who}`, body: `${formatINR(c.amountPaise)} · ${reason.trim()}`, href: "/admin/payments?show=waiting", dedupeKey: `claimrej:${claimId}` }, adminId);
   });
 }
 

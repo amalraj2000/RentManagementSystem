@@ -36,11 +36,11 @@ export async function impersonateTenantAction(tenantId: string) {
 /** Leaves "viewing as tenant" and returns to the admin dashboard. */
 export async function stopImpersonationAction() {
   const me = await getCurrentUser();
-  if (!me?.impersonatedBy) redirect("/login");
+  if (!me?.impersonatedBy) redirect("/?login=1");
   const db = getDb();
   const [admin] = await db.select().from(users).where(and(eq(users.id, me.impersonatedBy), eq(users.role, "admin"), eq(users.isActive, true)));
   await dropCurrentSession();
-  if (!admin) redirect("/login");
+  if (!admin) redirect("/?login=1");
   await audit(db, admin.id, "impersonate.stop", "user", me.id);
   await startSession(admin.id);
   redirect("/admin/tenants");
