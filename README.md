@@ -31,7 +31,7 @@ turso db tokens create pg-manager                # -> TURSO_AUTH_TOKEN (keep sec
 
 ## Deploy to Vercel
 
-1. Push the repo to GitHub and import it in Vercel (framework: Next.js; build command `npm run build`).
+1. Push the repo to GitHub and import it in Vercel (framework: Next.js; build command `npm run build`). `vercel.json` pins the functions to **Mumbai (bom1)** so they sit next to a Mumbai Turso database, and schedules the daily reminder cron.
 2. Add environment variables (Production, and Preview if wanted): `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, `APP_URL`.
 3. **Migrate before first deploy** from your machine (or CI): `TURSO_DATABASE_URL=… TURSO_AUTH_TOKEN=… npm run db:migrate`.
 4. Create the admin once (see above) pointing at the production DB.
