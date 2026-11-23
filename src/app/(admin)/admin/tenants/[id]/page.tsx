@@ -7,7 +7,7 @@ import { Badge, Card, Empty, Field, Input, PageHeader, Select, Table, Td, Th } f
 import { deleteTenantAction, moveBedAction, revertVacateAction, vacateAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { bedAssignments, beds, invoices, rooms, tenantProfiles, users } from "@/db/schema";
-import { invoiceStatus } from "@/lib/billing";
+import { invoiceSplits } from "@/services/reports";
 import { formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { listRoomsWithBeds } from "@/services/tenants";
@@ -27,7 +27,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
   if (!row) notFound();
   const { p } = row;
   const [invs, history, rooms_, docs] = await Promise.all([
-    db.select().from(invoices).where(eq(invoices.tenantId, id)).orderBy(desc(invoices.periodMonth)).limit(12),
+    invoiceSplits(db, eq(invoices.tenantId, id)).then((all) => all.sort((a, b) => b.periodMonth.localeCompare(a.periodMonth)).slice(0, 12)),
     db
       .select({ room: rooms.name, bed: beds.bedNumber, start: bedAssignments.startDate, end: bedAssignments.endDate })
       .from(bedAssignments)
@@ -77,15 +77,13 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
             <h2 className="mb-2 text-sm font-semibold">Recent invoices</h2>
             {invs.length === 0 ? <Card><Empty>No invoices yet.</Empty></Card> : (
               <Table>
-                <thead><tr><Th>Month</Th><Th>Total</Th><Th>Paid</Th><Th>Balance</Th><Th>Status</Th></tr></thead>
+                <thead><tr><Th>Month</Th><Th>Rent</Th><Th>Expenses</Th></tr></thead>
                 <tbody>
                   {invs.map((i) => (
                     <tr key={i.id}>
                       <Td><Link className="font-medium hover:underline" href={`/admin/invoices/${i.id}`}>{monthLabel(i.periodMonth)}</Link></Td>
-                      <Td className="tabular-nums">{formatINR(i.totalPaise)}</Td>
-                      <Td className="tabular-nums">{formatINR(i.paidPaise)}</Td>
-                      <Td className="tabular-nums">{formatINR(Math.max(i.totalPaise - i.paidPaise, 0))}</Td>
-                      <Td><Badge kind={invoiceStatus(i, today)} /></Td>
+                      <Td className="tabular-nums">{formatINR(i.split.rentPayable)}<span className={`block text-xs ${i.split.rentBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>{i.split.rentBalance > 0 ? `${formatINR(i.split.rentBalance)} due` : "paid"}</span></Td>
+                      <Td className="tabular-nums">{i.split.expensePayable > 0 ? <>{formatINR(i.split.expensePayable)}<span className={`block text-xs ${i.split.expenseBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>{i.split.expenseBalance > 0 ? `${formatINR(i.split.expenseBalance)} due` : "paid"}</span></> : <span className="text-muted">—</span>}</Td>
                     </tr>
                   ))}
                 </tbody>

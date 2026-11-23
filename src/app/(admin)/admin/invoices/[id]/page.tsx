@@ -5,7 +5,6 @@ import { PaymentForm } from "@/components/payment-form";
 import { Badge, Card, Field, Input, PageHeader, Select, Table, Td, Th } from "@/components/ui";
 import { addInvoiceItemAction, voidPaymentAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
-import { invoiceStatus } from "@/lib/billing";
 import { formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { getInvoiceDetail, invoiceBuckets } from "@/services/billing";
@@ -22,7 +21,6 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
       <PageHeader
         title={`${inv.tenantName} · ${monthLabel(inv.periodMonth)}`}
         description={`Due ${formatDate(inv.dueDate)}`}
-        actions={<Badge kind={invoiceStatus(inv, todayISO())} />}
       />
       <div className="grid gap-4 lg:grid-cols-[3fr_2fr]">
         <div className="space-y-4">
@@ -38,15 +36,24 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
               </Card>
             ))}
           </div>
-          <Table>
-            <thead><tr><Th>Item</Th><Th className="text-right">Amount</Th></tr></thead>
-            <tbody>
-              {inv.items.map((i) => <tr key={i.id}><Td>{i.description}</Td><Td className="text-right tabular-nums">{formatINR(i.amountPaise)}</Td></tr>)}
-              <tr><Td className="font-semibold">Total</Td><Td className="text-right font-semibold tabular-nums">{formatINR(inv.totalPaise)}</Td></tr>
-              <tr><Td>Paid</Td><Td className="text-right tabular-nums">{formatINR(inv.paidPaise)}</Td></tr>
-              <tr><Td className="font-semibold">Balance</Td><Td className="text-right font-semibold tabular-nums">{formatINR(b.rentBalance + b.expenseBalance)}</Td></tr>
-            </tbody>
-          </Table>
+          {/* rent and expenses are listed and added up separately — never one combined total */}
+          {([
+            ["Rent", inv.items.filter((i) => i.kind === "rent" || i.kind === "adjustment"), b.rentPayable, b.rentCovered, b.rentBalance],
+            ["Expenses", inv.items.filter((i) => i.kind !== "rent" && i.kind !== "adjustment"), b.expensePayable, b.expenseCovered, b.expenseBalance],
+          ] as const).filter(([, items]) => items.length > 0).map(([name, items, payable, paid, bal]) => (
+            <div key={name}>
+              <h2 className="mb-2 text-sm font-semibold">{name}</h2>
+              <Table>
+                <thead><tr><Th>Item</Th><Th className="text-right">Amount</Th></tr></thead>
+                <tbody>
+                  {items.map((i) => <tr key={i.id}><Td>{i.description}</Td><Td className="text-right tabular-nums">{formatINR(i.amountPaise)}</Td></tr>)}
+                  <tr><Td className="font-semibold">{name} total</Td><Td className="text-right font-semibold tabular-nums">{formatINR(payable)}</Td></tr>
+                  <tr><Td>Paid</Td><Td className="text-right tabular-nums">{formatINR(paid)}</Td></tr>
+                  <tr><Td className="font-semibold">Balance</Td><Td className="text-right font-semibold tabular-nums">{formatINR(bal)}</Td></tr>
+                </tbody>
+              </Table>
+            </div>
+          ))}
           <div>
             <h2 className="mb-2 text-sm font-semibold">Payments</h2>
             <Table>

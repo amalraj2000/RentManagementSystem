@@ -10,6 +10,7 @@ import { purposeLabel } from "@/lib/billing";
 import { methodLabel } from "@/lib/payment-methods";
 import { requireUser } from "@/lib/session";
 import { tenantForUser } from "@/services/portal";
+import { invoiceBuckets } from "@/services/billing";
 
 export const metadata = { title: "Receipt" };
 export const dynamic = "force-dynamic";
@@ -19,7 +20,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
   const { id } = await params;
   const db = getDb();
   const [r] = await db
-    .select({ p: payments, name: users.name, month: invoices.periodMonth, total: invoices.totalPaise, paid: invoices.paidPaise })
+    .select({ p: payments, name: users.name, month: invoices.periodMonth })
     .from(payments)
     .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
     .innerJoin(tenantProfiles, eq(tenantProfiles.id, payments.tenantId))
@@ -31,6 +32,8 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
     const me = await tenantForUser(db, user.id);
     if (!me || me.id !== r.p.tenantId) notFound();
   }
+  const b = await invoiceBuckets(db, r.p.invoiceId);
+  const left = r.p.purpose === "rent" ? b.rentBalance : b.expenseBalance; // only what is left of THIS (rent or expenses), never both added
   return (
     <main className="mx-auto max-w-md p-4 sm:p-8">
       <div className="rounded-xl border border-line bg-white p-6">
@@ -50,7 +53,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
           <span className="text-sm text-muted">Amount received</span>
           <span className="text-2xl font-semibold tabular-nums">{formatINR(r.p.amountPaise)}</span>
         </div>
-        <p className="mt-2 text-right text-xs text-muted">Balance on this bill after this payment: {formatINR(Math.max(r.total - r.paid, 0))}</p>
+        <p className="mt-2 text-right text-xs text-muted">{purposeLabel(r.p.purpose)} still unpaid on this bill: {formatINR(Math.max(left, 0))}</p>
         <p className="mt-6 text-xs text-muted">Recorded manually by the PG owner. This is an acknowledgement of payment received.</p>
       </div>
     </main>

@@ -6,6 +6,7 @@ import { currentMonth, formatDate, monthLabel, todayISO, addMonths } from "@/lib
 import { formatINR } from "@/lib/money";
 import { dashboardData, expenseByCategory, monthlySummary, unpaidThisMonth } from "@/services/reports";
 import { invoiceStatus } from "@/lib/billing";
+import { SplitAmount } from "@/components/split-amount";
 import { ConfirmButton } from "@/components/action-form";
 import { ChoiceChips, METHOD_CHOICES } from "@/components/choice-chips";
 import { categoryLabel } from "@/lib/categories";
@@ -113,9 +114,12 @@ export default async function Dashboard() {
           </Card>
         </section>
       )}
-      {d.outstandingTotal > d.split.rentPending + d.split.expensePending && (
-        <p className="mt-3 text-xs text-muted">Unpaid from earlier months: {formatINR(d.outstandingTotal - d.split.rentPending - d.split.expensePending)} (see “Outstanding balances” below).</p>
-      )}
+      {(() => {
+        // unpaid from earlier months, rent and expenses kept apart
+        const oldRent = d.owing.reduce((a, o) => a + o.rent, 0) - d.split.rentPending;
+        const oldExp = d.owing.reduce((a, o) => a + o.expense, 0) - d.split.expensePending;
+        return oldRent > 0 || oldExp > 0 ? <p className="mt-3 text-xs text-muted">Unpaid from earlier months: {[oldRent > 0 && `Rent ${formatINR(oldRent)}`, oldExp > 0 && `Expenses ${formatINR(oldExp)}`].filter(Boolean).join(" · ")} (see “Outstanding balances” below).</p> : null;
+      })()}
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         <Card>
@@ -138,7 +142,7 @@ export default async function Dashboard() {
               {d.upcoming.map((u) => (
                 <li key={u.id} className="flex items-center justify-between px-4 py-2.5 text-sm">
                   <div><p className="font-medium">{u.name}</p><p className="text-xs text-muted">Due {formatDate(u.dueDate)}</p></div>
-                  <span className="font-medium tabular-nums">{formatINR(Number(u.balance))}</span>
+                  <SplitAmount rent={u.rent} expense={u.expense} />
                 </li>
               ))}
             </ul>
@@ -156,7 +160,7 @@ export default async function Dashboard() {
                   </div>
                   <div className="flex items-center gap-2">
                     {invoiceStatus({ totalPaise: 1, paidPaise: 0, dueDate: o.oldestDue }, today) === "overdue" && <Badge kind="overdue" />}
-                    <span className="font-medium tabular-nums">{formatINR(o.balance)}</span>
+                    <SplitAmount rent={o.rent} expense={o.expense} />
                   </div>
                 </li>
               ))}

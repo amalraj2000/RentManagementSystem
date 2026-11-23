@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql, type SQL } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { bedAssignments, expenses, invoiceItems, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
 import { addMonths, monthEnd, monthStart } from "@/lib/dates";
@@ -6,6 +6,25 @@ import { expenseLinesFor } from "./expense-lines";
 import { allocatePayment, splitRentExpense, type Cat } from "@/lib/billing";
 
 const outstandingExpr = sql<number>`coalesce(sum(max(${invoices.totalPaise} - ${invoices.paidPaise}, 0)), 0)`;
+
+/** Every bill (optionally filtered) with its RENT and EXPENSES kept apart: what each costs and what is still unpaid on each. */
+export async function invoiceSplits(db: DB, cond?: SQL) {
+  const rows = await db
+    .select({
+      id: invoices.id, tenantId: invoices.tenantId, userId: users.id, name: users.name, status: tenantProfiles.status, periodMonth: invoices.periodMonth, dueDate: invoices.dueDate,
+      rentPaid: invoices.rentPaidPaise, expensePaid: invoices.expensePaidPaise,
+      rent: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'rent' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      other: sql<number>`coalesce(sum(case when ${invoiceItems.kind} not in ('rent', 'adjustment') then ${invoiceItems.amountPaise} else 0 end), 0)`,
+      adjustment: sql<number>`coalesce(sum(case when ${invoiceItems.kind} = 'adjustment' then ${invoiceItems.amountPaise} else 0 end), 0)`,
+    })
+    .from(invoices)
+    .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
+    .innerJoin(users, eq(users.id, tenantProfiles.userId))
+    .leftJoin(invoiceItems, eq(invoiceItems.invoiceId, invoices.id))
+    .where(and(isNull(invoices.cancelledAt), cond))
+    .groupBy(invoices.id, users.id, users.name, tenantProfiles.status);
+  return rows.map((r) => ({ id: r.id, tenantId: r.tenantId, userId: r.userId, name: r.name, status: r.status, periodMonth: r.periodMonth, dueDate: r.dueDate, split: splitRentExpense({ rent: Number(r.rent), other: Number(r.other), adjustment: Number(r.adjustment) }, { rent: r.rentPaid, expense: r.expensePaid }) }));
+}
 
 export async function dashboardData(db: DB, month: string, today: string) {
   const [cap, residents, occupied, collected, pendingMonth, outstandingAll, utilities, spent, recent, upcoming, owing] = await Promise.all([
@@ -35,14 +54,7 @@ export async function dashboardData(db: DB, month: string, today: string) {
       .where(isNull(payments.voidedAt))
       .orderBy(desc(payments.paidOn), desc(payments.createdAt))
       .limit(5),
-    db
-      .select({ id: invoices.id, dueDate: invoices.dueDate, balance: sql<number>`${invoices.totalPaise} - ${invoices.paidPaise}`, name: users.name })
-      .from(invoices)
-      .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
-      .innerJoin(users, eq(users.id, tenantProfiles.userId))
-      .where(and(sql`${invoices.totalPaise} > ${invoices.paidPaise}`, gte(invoices.dueDate, today)))
-      .orderBy(asc(invoices.dueDate))
-      .limit(5),
+    invoiceSplits(db, gte(invoices.dueDate, today)).then((all) => all.filter((i) => i.split.rentBalance + i.split.expenseBalance > 0).sort((x, y) => x.dueDate.localeCompare(y.dueDate)).slice(0, 5).map((i) => ({ id: i.id, dueDate: i.dueDate, name: i.name, rent: i.split.rentBalance, expense: i.split.expenseBalance }))),
     outstandingByTenant(db),
   ]);
   const capacity = Number(cap[0].n);
@@ -143,22 +155,20 @@ export async function unpaidThisMonth(db: DB, month: string) {
   return out;
 }
 
+/** Who still owes — with the RENT they owe and the EXPENSES they owe kept apart. */
 export async function outstandingByTenant(db: DB) {
-  const rows = await db
-    .select({
-      tenantId: tenantProfiles.id,
-      name: users.name,
-      status: tenantProfiles.status,
-      balance: sql<number>`sum(${invoices.totalPaise} - ${invoices.paidPaise})`,
-      oldestDue: sql<string>`min(${invoices.dueDate})`,
-    })
-    .from(invoices)
-    .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
-    .innerJoin(users, eq(users.id, tenantProfiles.userId))
-    .where(sql`${invoices.totalPaise} > ${invoices.paidPaise}`)
-    .groupBy(tenantProfiles.id, users.name, tenantProfiles.status)
-    .orderBy(desc(sql`sum(${invoices.totalPaise} - ${invoices.paidPaise})`));
-  return rows.map((r) => ({ ...r, balance: Number(r.balance) }));
+  const all = await invoiceSplits(db);
+  const by = new Map<string, { tenantId: string; name: string; status: string; rent: number; expense: number; balance: number; oldestDue: string }>();
+  for (const i of all) {
+    if (i.split.rentBalance + i.split.expenseBalance <= 0) continue;
+    const cur = by.get(i.tenantId) ?? { tenantId: i.tenantId, name: i.name, status: i.status, rent: 0, expense: 0, balance: 0, oldestDue: i.dueDate };
+    cur.rent += i.split.rentBalance;
+    cur.expense += i.split.expenseBalance;
+    cur.balance = cur.rent + cur.expense;
+    if (i.dueDate < cur.oldestDue) cur.oldestDue = i.dueDate;
+    by.set(i.tenantId, cur);
+  }
+  return [...by.values()].sort((a, b) => b.balance - a.balance);
 }
 
 export type MonthRow = {

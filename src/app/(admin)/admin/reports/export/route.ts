@@ -3,7 +3,7 @@ import { getDb } from "@/db/client";
 import { expenses, invoices, payments, tenantProfiles, users } from "@/db/schema";
 import { getCurrentUser } from "@/lib/session";
 import { monthEnd, monthStart, MONTH_RE } from "@/lib/dates";
-import { monthlySummary } from "@/services/reports";
+import { invoiceSplits, monthlySummary } from "@/services/reports";
 import { categoryLabel } from "@/lib/categories";
 import { purposeLabel } from "@/lib/billing";
 
@@ -34,13 +34,7 @@ export async function GET(req: Request) {
       .where(and(isNull(payments.voidedAt), gte(payments.paidOn, monthStart(month)), lte(payments.paidOn, monthEnd(month))))
       .orderBy(asc(payments.paidOn)),
     db.select().from(expenses).where(and(gte(expenses.spentOn, monthStart(month)), lte(expenses.spentOn, monthEnd(month)))).orderBy(asc(expenses.spentOn)),
-    db
-      .select({ name: users.name, total: invoices.totalPaise, paid: invoices.paidPaise, due: invoices.dueDate })
-      .from(invoices)
-      .innerJoin(tenantProfiles, eq(tenantProfiles.id, invoices.tenantId))
-      .innerJoin(users, eq(users.id, tenantProfiles.userId))
-      .where(eq(invoices.periodMonth, month))
-      .orderBy(asc(users.name)),
+    invoiceSplits(db, eq(invoices.periodMonth, month)).then((all) => all.sort((a, b) => a.name.localeCompare(b.name))),
   ]);
   const L: (string | number)[][] = [
     ["PG financial report", month],
@@ -53,11 +47,13 @@ export async function GET(req: Request) {
     ["Total cash collected", rupees(sum.collected.total)],
     ["Operating expenses", rupees(sum.expenses)],
     ["Net cash", rupees(sum.net)],
-    ["Invoiced (billed, not income)", rupees(sum.invoiced)],
-    ["Outstanding on month's invoices", rupees(sum.outstanding)],
+    ["Rent billed (not income)", rupees(invs.reduce((a, i) => a + i.split.rentPayable, 0))],
+    ["Rent still unpaid", rupees(invs.reduce((a, i) => a + i.split.rentBalance, 0))],
+    ["Expenses billed to tenants (not income)", rupees(invs.reduce((a, i) => a + i.split.expensePayable, 0))],
+    ["Expenses still unpaid", rupees(invs.reduce((a, i) => a + i.split.expenseBalance, 0))],
     [],
-    ["INVOICES"], ["Tenant", "Total", "Paid", "Balance", "Due date"],
-    ...invs.map((i) => [i.name, rupees(i.total), rupees(i.paid), rupees(Math.max(i.total - i.paid, 0)), i.due]),
+    ["INVOICES"], ["Tenant", "Rent", "Rent paid", "Rent due", "Expenses", "Expenses paid", "Expenses due", "Due date"],
+    ...invs.map((i) => [i.name, rupees(i.split.rentPayable), rupees(i.split.rentCovered), rupees(i.split.rentBalance), rupees(i.split.expensePayable), rupees(i.split.expenseCovered), rupees(i.split.expenseBalance), i.dueDate]),
     [],
     ["PAYMENTS RECEIVED"], ["Date", "Tenant", "For month", "Paid for", "Amount", "Method", "Reference", "Receipt"],
     ...pays.map((p) => [p.date, p.name, p.period, purposeLabel(p.purpose), rupees(p.amount), p.method, p.ref ?? "", p.receipt]),

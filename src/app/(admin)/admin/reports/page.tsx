@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { eq } from "drizzle-orm";
+import { invoices } from "@/db/schema";
 import { Download } from "lucide-react";
 import { MonthPicker } from "@/components/month-picker";
 import { buttonClass, Card, Empty, PageHeader, Stat, Table, Td, Th } from "@/components/ui";
@@ -7,7 +9,8 @@ import { categoryLabel } from "@/lib/categories";
 import { addMonths, formatDate, monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { monthParam } from "@/lib/page";
-import { monthlySummary, outstandingByTenant } from "@/services/reports";
+import { invoiceSplits, monthlySummary, outstandingByTenant } from "@/services/reports";
+import { SplitAmount } from "@/components/split-amount";
 
 export const metadata = { title: "Reports" };
 
@@ -17,6 +20,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
   // The chosen month plus the 5 before it, so there's always some context.
   const [rows, owing] = await Promise.all([monthlySummary(db, addMonths(month, -5), month), outstandingByTenant(db)]);
   const sel = rows[rows.length - 1];
+  const monthBills = await invoiceSplits(db, eq(invoices.periodMonth, month));
+  const billed = monthBills.reduce((a, i) => ({ rent: a.rent + i.split.rentPayable, rentDue: a.rentDue + i.split.rentBalance, exp: a.exp + i.split.expensePayable, expDue: a.expDue + i.split.expenseBalance }), { rent: 0, rentDue: 0, exp: 0, expDue: 0 });
   const history = [...rows].reverse();
   const parts = [
     ["Rent", sel.collected.rent],
@@ -24,7 +29,8 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
     ["Other", sel.collected.other],
   ].filter(([, v]) => (v as number) > 0) as [string, number][];
   const spent = Object.entries(sel.expensesByCategory).sort((a, b) => b[1] - a[1]);
-  const owedTotal = owing.reduce((a, o) => a + o.balance, 0);
+  const owedRent = owing.reduce((a, o) => a + o.rent, 0);
+  const owedExp = owing.reduce((a, o) => a + o.expense, 0);
   return (
     <>
       <PageHeader
@@ -44,7 +50,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         <Stat label="Left over" value={formatINR(sel.net)} tone={sel.net < 0 ? "warn" : "good"} hint={sel.net < 0 ? "Spent more than received" : "Received minus spent"} />
       </div>
       <p className="mt-2 text-xs text-muted">
-        “Received” is money actually collected on its payment date. Bills raised this month: {formatINR(sel.invoiced)}, of which {formatINR(sel.outstanding)} is still unpaid (not counted as income).
+        “Received” is money actually collected on its payment date. Bills raised this month: rent {formatINR(billed.rent)} ({formatINR(billed.rentDue)} unpaid) and expenses {formatINR(billed.exp)} ({formatINR(billed.expDue)} unpaid). Unpaid bills are not counted as income.
       </p>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -64,7 +70,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
         <Card>
           <h2 className="flex items-baseline justify-between border-b border-line px-4 py-3 text-sm font-semibold">
             <span>Who still owes</span>
-            {owing.length > 0 && <span className="text-xs font-normal text-muted">Total {formatINR(owedTotal)}</span>}
+            {owing.length > 0 && <span className="text-xs font-normal text-muted">{[owedRent > 0 && `Rent ${formatINR(owedRent)}`, owedExp > 0 && `Expenses ${formatINR(owedExp)}`].filter(Boolean).join(" · ")}</span>}
           </h2>
           {owing.length === 0 ? <Empty>Everyone is settled up.</Empty> : (
             <ul className="divide-y divide-line">
@@ -74,7 +80,7 @@ export default async function Reports({ searchParams }: { searchParams: Promise<
                     <Link href={`/admin/tenants/${o.tenantId}`} className="font-medium hover:underline">{o.name}</Link>
                     <p className="text-xs text-muted">Since {formatDate(o.oldestDue)}</p>
                   </div>
-                  <span className="font-medium tabular-nums">{formatINR(o.balance)}</span>
+                  <SplitAmount rent={o.rent} expense={o.expense} />
                 </li>
               ))}
             </ul>

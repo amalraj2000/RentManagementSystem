@@ -52,7 +52,7 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
       />
       {rows.length === 0 ? <Empty>No invoices for this month yet.</Empty> : (
         <Table>
-          <thead><tr><Th>Tenant</Th><Th className="text-right">Rent</Th><Th className="text-right">Expenses</Th><Th>Due</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
+          <thead><tr><Th>Tenant</Th><Th className="text-right">Rent</Th><Th className="text-right">Expenses</Th><Th>Due</Th><Th className="text-right">Action</Th></tr></thead>
           <tbody>
             {pageRows.map((r) => (
               <tr key={r.id}>
@@ -60,7 +60,6 @@ export default async function InvoicesPage({ searchParams }: { searchParams: Pro
                 <Td className="text-right tabular-nums">{formatINR(r.split.rentPayable)}<span className={`block text-xs ${r.split.rentBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>{r.split.rentBalance > 0 ? `${formatINR(r.split.rentBalance)} due` : "paid"}</span></Td>
                 <Td className="text-right tabular-nums">{r.split.expensePayable > 0 ? <>{formatINR(r.split.expensePayable)}<span className={`block text-xs ${r.split.expenseBalance > 0 ? "text-amber-700" : "text-emerald-700"}`}>{r.split.expenseBalance > 0 ? `${formatINR(r.split.expenseBalance)} due` : "paid"}</span></> : <span className="text-muted">—</span>}</Td>
                 <Td>{formatDate(r.dueDate)}</Td>
-                <Td><Badge kind={invoiceStatus({ totalPaise: r.total, paidPaise: r.paid, dueDate: r.dueDate, cancelledAt: r.cancelledAt }, today)} /></Td>
                 <Td>
                   <RowActions>
                     <EditLink href={`/admin/invoices/${r.id}`} label="Open" />

@@ -49,13 +49,17 @@ export default async function PortalInvoice({ params }: { params: Promise<{ id: 
           </Card>
         ))}
       </div>
-      <h2 className="mb-2 mt-6 text-sm font-semibold">What this bill is made of</h2>
-      <Table compact>
-        <thead><tr><Th>Item</Th><Th className="text-right">Amount</Th></tr></thead>
-        <tbody>
-          {inv.items.map((i) => <tr key={i.id}><Td className="whitespace-normal">{i.description}</Td><Td className="text-right tabular-nums">{formatINR(i.amountPaise)}</Td></tr>)}
-        </tbody>
-      </Table>
+      {([["Rent", inv.items.filter((i) => i.kind === "rent" || i.kind === "adjustment")], ["Expenses", inv.items.filter((i) => i.kind !== "rent" && i.kind !== "adjustment")]] as const).filter(([, items]) => items.length > 0).map(([name, items]) => (
+        <div key={name}>
+          <h2 className="mb-2 mt-6 text-sm font-semibold">{name} · what it is made of</h2>
+          <Table compact>
+            <thead><tr><Th>Item</Th><Th className="text-right">Amount</Th></tr></thead>
+            <tbody>
+              {items.map((i) => <tr key={i.id}><Td className="whitespace-normal">{i.description}</Td><Td className="text-right tabular-nums">{formatINR(i.amountPaise)}</Td></tr>)}
+            </tbody>
+          </Table>
+        </div>
+      ))}
       <h2 className="mb-2 mt-6 text-sm font-semibold">Payments</h2>
       <Card>
         {valid.length === 0 ? <p className="p-4 text-sm text-muted">No payments recorded yet.</p> : (
