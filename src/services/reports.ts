@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
-import { bedAssignments, expenses, invoiceItems, invoices, payments, rooms, tenantProfiles, users, utilityBills } from "@/db/schema";
+import { bedAssignments, expenses, invoiceItems, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
 import { addMonths, monthEnd, monthStart } from "@/lib/dates";
 import { waterfall, type Cat } from "@/lib/billing";
 
@@ -8,7 +8,7 @@ const outstandingExpr = sql<number>`coalesce(sum(max(${invoices.totalPaise} - ${
 
 export async function dashboardData(db: DB, month: string, today: string) {
   const [cap, residents, occupied, collected, pendingMonth, outstandingAll, utilities, spent, recent, upcoming, owing] = await Promise.all([
-    db.select({ n: sql<number>`coalesce(sum(${rooms.maxOccupancy}), 0)` }).from(rooms),
+    db.select({ n: sql<number>`coalesce(sum(${rooms.maxOccupancy}), 0)` }).from(rooms).where(isNull(rooms.archivedAt)),
     db.select({ n: sql<number>`count(*)` }).from(tenantProfiles).where(ne(tenantProfiles.status, "moved_out")),
     db.select({ n: sql<number>`count(*)` }).from(bedAssignments).where(isNull(bedAssignments.endDate)),
     db
@@ -17,7 +17,11 @@ export async function dashboardData(db: DB, month: string, today: string) {
       .where(and(isNull(payments.voidedAt), gte(payments.paidOn, monthStart(month)), lte(payments.paidOn, monthEnd(month)))),
     db.select({ n: outstandingExpr }).from(invoices).where(eq(invoices.periodMonth, month)),
     db.select({ n: outstandingExpr }).from(invoices),
-    db.select({ type: utilityBills.type, total: utilityBills.totalPaise }).from(utilityBills).where(eq(utilityBills.periodMonth, month)),
+    db
+      .select({ type: expenses.category, total: sql<number>`sum(${expenses.amountPaise})` })
+      .from(expenses)
+      .where(and(inArray(expenses.category, ["electricity", "water"]), gte(expenses.spentOn, monthStart(month)), lte(expenses.spentOn, monthEnd(month))))
+      .groupBy(expenses.category),
     db
       .select({ n: sql<number>`coalesce(sum(${expenses.amountPaise}), 0)` })
       .from(expenses)
@@ -48,8 +52,8 @@ export async function dashboardData(db: DB, month: string, today: string) {
     rentCollected: Number(collected[0].n),
     pendingThisMonth: Number(pendingMonth[0].n),
     outstandingTotal: Number(outstandingAll[0].n),
-    electricity: utilities.find((u) => u.type === "electricity")?.total ?? null,
-    water: utilities.find((u) => u.type === "water")?.total ?? null,
+    electricity: utilities.find((u) => u.type === "electricity") ? Number(utilities.find((u) => u.type === "electricity")!.total) : null,
+    water: utilities.find((u) => u.type === "water") ? Number(utilities.find((u) => u.type === "water")!.total) : null,
     expenses: Number(spent[0].n),
     recent,
     upcoming,

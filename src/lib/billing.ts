@@ -84,3 +84,52 @@ export function waterfall(
   out.rent += left; // overpayment / negative-net edge cases fall to rent
   return out;
 }
+
+/**
+ * Shows how much of an invoice's PAID amount covers each line, so a tenant can see which items are settled.
+ * Same order the reports use (rent → electricity → water → other); discounts reduce the first lines (rent first).
+ * The invoice-level paid/total numbers stay the source of truth — this is only a per-line view.
+ */
+export function itemSettlement<T extends { id: string; kind: string; amountPaise: number }>(items: T[], paidPaise: number) {
+  const order = ["rent", "electricity", "water", "other"];
+  let discount = items.filter((i) => i.amountPaise < 0).reduce((a, i) => a - i.amountPaise, 0);
+  let left = paidPaise;
+  const out = new Map<string, { payable: number; covered: number; status: "paid" | "partial" | "unpaid" }>();
+  const positives = items.filter((i) => i.amountPaise > 0).sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind));
+  for (const it of positives) {
+    const off = Math.min(it.amountPaise, discount);
+    discount -= off;
+    const payable = it.amountPaise - off;
+    const covered = Math.max(Math.min(payable, left), 0);
+    left -= covered;
+    out.set(it.id, { payable, covered, status: covered >= payable ? "paid" : covered > 0 ? "partial" : "unpaid" });
+  }
+  return out;
+}
+
+/** Every month from `from` to `to` inclusive (YYYY-MM), newest first. */
+export function monthsBetween(from: string, to: string): string[] {
+  const out: string[] = [];
+  let [y, m] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  while (y < ty || (y === ty && m <= tm)) {
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return out.reverse();
+}
+
+export type RentState = "paid" | "waiting" | "overdue" | "partial" | "unpaid";
+
+/**
+ * What a tenant sees for a month: Paid · Waiting for confirmation (they reported a payment that covers the balance) ·
+ * Overdue · Partly paid · Unpaid. A month is only "Paid" once the owner has confirmed.
+ */
+export function rentState(inv: { totalPaise: number; paidPaise: number; dueDate: string; cancelledAt?: Date | null }, pendingPaise: number, today: string): RentState {
+  const balance = inv.totalPaise - inv.paidPaise;
+  if (balance <= 0) return "paid";
+  if (pendingPaise >= balance) return "waiting";
+  const s = invoiceStatus(inv, today);
+  return s === "overdue" ? "overdue" : s === "partial" ? "partial" : "unpaid";
+}

@@ -4,13 +4,15 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { ActionForm, ConfirmButton } from "@/components/action-form";
 import { TenantFields } from "@/components/tenant-fields";
 import { Badge, Card, Empty, Field, Input, PageHeader, Select, Table, Td, Th } from "@/components/ui";
-import { deleteTenantAction, moveBedAction, moveOutAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
+import { deleteTenantAction, moveBedAction, vacateAction, resetPasswordAction, toggleLoginAction, updateTenantAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { bedAssignments, beds, invoices, rooms, tenantProfiles, users } from "@/db/schema";
 import { invoiceStatus } from "@/lib/billing";
 import { formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { listRoomsWithBeds } from "@/services/tenants";
+import { listDocuments } from "@/services/documents";
+import { DocumentsCard } from "@/components/documents-card";
 
 export const metadata = { title: "Tenant" };
 
@@ -24,7 +26,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
     .where(eq(tenantProfiles.id, id));
   if (!row) notFound();
   const { p } = row;
-  const [invs, history, rooms_] = await Promise.all([
+  const [invs, history, rooms_, docs] = await Promise.all([
     db.select().from(invoices).where(eq(invoices.tenantId, id)).orderBy(desc(invoices.periodMonth)).limit(12),
     db
       .select({ room: rooms.name, bed: beds.bedNumber, start: bedAssignments.startDate, end: bedAssignments.endDate })
@@ -34,13 +36,14 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
       .where(eq(bedAssignments.tenantId, id))
       .orderBy(desc(bedAssignments.startDate)),
     listRoomsWithBeds(db),
+    listDocuments(db, id),
   ]);
   const today = todayISO();
   const current = history.find((h) => !h.end);
   const movedOut = p.status === "moved_out";
   const update = updateTenantAction.bind(null, id);
   const moveBed = moveBedAction.bind(null, id);
-  const moveOut = moveOutAction.bind(null, id);
+  const vacate = vacateAction.bind(null, id);
   const reset = resetPasswordAction.bind(null, id);
   async function del() {
     "use server";
@@ -52,7 +55,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
     <>
       <PageHeader
         title={row.name}
-        description={current ? `${current.room} · Bed ${current.bed}` : movedOut ? `Moved out ${formatDate(p.moveOutDate)}` : "No bed assigned"}
+        description={current ? `${current.room} · Bed ${current.bed}` : movedOut ? `Vacated ${formatDate(p.moveOutDate)}` : "No bed assigned"}
         actions={<Badge kind={p.status} />}
       />
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
@@ -64,7 +67,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
                 <div><dt className="text-muted">Email</dt><dd>{row.email}</dd></div>
                 <div><dt className="text-muted">Phone</dt><dd>{p.phone}</dd></div>
                 <div><dt className="text-muted">Joined</dt><dd>{formatDate(p.joiningDate)}</dd></div>
-                <div><dt className="text-muted">Moved out</dt><dd>{formatDate(p.moveOutDate)}</dd></div>
+                <div><dt className="text-muted">Vacated</dt><dd>{formatDate(p.moveOutDate)}</dd></div>
                 <div><dt className="text-muted">Rent</dt><dd>{formatINR(p.monthlyRentPaise)}</dd></div>
                 <div><dt className="text-muted">Deposit</dt><dd>{formatINR(p.securityDepositPaise)}</dd></div>
               </dl>
@@ -74,6 +77,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
               </ActionForm>
             )}
           </Card>
+          <DocumentsCard tenantId={id} name={row.name} docs={docs} />
           <div>
             <h2 className="mb-2 text-sm font-semibold">Recent invoices</h2>
             {invs.length === 0 ? <Card><Empty>No invoices yet.</Empty></Card> : (
@@ -125,10 +129,10 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
                 </div>
               </Card>
               <Card className="p-5">
-                <h2 className="mb-1 text-sm font-semibold">Move out</h2>
+                <h2 className="mb-1 text-sm font-semibold">Vacate</h2>
                 <p className="mb-3 text-xs text-muted">Frees the bed. Invoices, payments and any unpaid balance are kept.</p>
-                <ActionForm action={moveOut} submit="Move out" variant="danger" reset={false}>
-                  <Field label="Move-out date"><Input name="date" type="date" required defaultValue={today} /></Field>
+                <ActionForm action={vacate} submit="Vacate" variant="danger" reset={false}>
+                  <Field label="Vacate date"><Input name="date" type="date" required defaultValue={today} /></Field>
                 </ActionForm>
               </Card>
             </>

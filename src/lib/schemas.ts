@@ -19,7 +19,7 @@ export const positiveMoney = money.refine((n) => n > 0, "Amount must be greater 
 export const nonNegMoney = money.refine((n) => n >= 0, "Amount cannot be negative");
 export const text = (max = 200) => z.string().trim().max(max);
 export const optText = (max = 200) => text(max).optional().transform((v) => v || null);
-export const phone = z.string().trim().regex(/^[+\d][\d\s-]{6,17}$/, "Enter a valid phone number");
+export const phone = z.string().trim().regex(/^[+\d][\d\s-]{6,17}$/, "Enter a valid mobile number");
 export const email = z.string().trim().toLowerCase().email("Enter a valid email").max(200);
 export const id = z.string().trim().min(1).max(64);
 export const optInt = z

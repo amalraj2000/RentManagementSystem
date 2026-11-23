@@ -3,6 +3,9 @@ import type { DB } from "@/db/client";
 import { bedAssignments, beds, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
 import { hashPassword, passwordProblem, destroyUserSessions } from "@/lib/auth-core";
 import { AppError, audit, type Q } from "./common";
+import { saveDocumentTx, type ValidFile } from "./documents";
+import { notifyAdmins, notifyTenant } from "./notifications";
+import { formatDate } from "@/lib/dates";
 
 export type TenantInput = {
   name: string;
@@ -20,6 +23,7 @@ export async function assignBedTx(q: Q, tenantId: string, bedId: string, startDa
   const [bed] = await q.select().from(beds).where(eq(beds.id, bedId));
   if (!bed) throw new AppError("Bed not found");
   const [room] = await q.select().from(rooms).where(eq(rooms.id, bed.roomId));
+  if (room.archivedAt) throw new AppError("That room has been removed");
   const [{ n }] = await q
     .select({ n: sql<number>`count(*)` })
     .from(bedAssignments)
@@ -33,14 +37,14 @@ export async function assignBedTx(q: Q, tenantId: string, bedId: string, startDa
   await q.insert(bedAssignments).values({ bedId, tenantId, startDate });
 }
 
-export async function createTenant(db: DB, actorId: string, input: TenantInput & { password: string; bedId?: string | null }) {
+export async function createTenant(db: DB, actorId: string, input: TenantInput & { password: string; bedId?: string | null; photo?: ValidFile | null; idProof?: { file: ValidFile; idType?: string | null } | null }) {
   const problem = passwordProblem(input.password);
-  if (problem) throw new AppError(problem);
+  if (problem) throw new AppError(problem, "password");
   const email = input.email.trim().toLowerCase();
   const passwordHash = await hashPassword(input.password);
   return db.transaction(async (tx) => {
     const [dupe] = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
-    if (dupe) throw new AppError("A user with this email already exists");
+    if (dupe) throw new AppError("A user with this email already exists", "email");
     const [u] = await tx
       .insert(users)
       .values({ email, name: input.name.trim(), role: "tenant", passwordHash, mustChangePassword: true })
@@ -59,20 +63,22 @@ export async function createTenant(db: DB, actorId: string, input: TenantInput &
       })
       .returning({ id: tenantProfiles.id });
     if (input.bedId) await assignBedTx(tx, p.id, input.bedId, input.joiningDate);
+    if (input.photo) await saveDocumentTx(tx, actorId, p.id, "photo", input.photo);
+    if (input.idProof) await saveDocumentTx(tx, actorId, p.id, "id_proof", input.idProof.file, input.idProof.idType);
     await audit(tx, actorId, "tenant.create", "tenant", p.id, { email, bedId: input.bedId ?? null });
     return p.id;
   });
 }
 
 export async function updateTenant(db: DB, actorId: string, tenantId: string, input: TenantInput & { status: "active" | "notice" | "moved_out" }) {
-  if (input.status === "moved_out") throw new AppError("Use the move-out action to move a tenant out");
+  if (input.status === "moved_out") throw new AppError("Use the Vacate action to vacate a tenant");
   await db.transaction(async (tx) => {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
-    if (p.status === "moved_out") throw new AppError("This tenant has moved out");
+    if (p.status === "moved_out") throw new AppError("This tenant has vacated");
     const email = input.email.trim().toLowerCase();
     const [dupe] = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
-    if (dupe && dupe.id !== p.userId) throw new AppError("A user with this email already exists");
+    if (dupe && dupe.id !== p.userId) throw new AppError("A user with this email already exists", "email");
     await tx.update(users).set({ name: input.name.trim(), email }).where(eq(users.id, p.userId));
     await tx
       .update(tenantProfiles)
@@ -88,13 +94,17 @@ export async function updateTenant(db: DB, actorId: string, tenantId: string, in
       })
       .where(eq(tenantProfiles.id, tenantId));
     await audit(tx, actorId, "tenant.update", "tenant", tenantId, { rent: input.monthlyRentPaise, status: input.status });
+    if (input.status === "notice" && p.status !== "notice") {
+      await notifyTenant(tx, tenantId, { type: "status_notice", title: "You are on notice period", body: "The PG owner has marked your stay as notice period. Please contact them for details.", href: "/portal/profile" });
+      await notifyAdmins(tx, { type: "status_notice", title: `${input.name.trim()} is on notice period`, body: "Marked by another admin.", href: `/admin/tenants/${tenantId}` }, actorId);
+    }
   });
 }
 
 export async function moveTenantToBed(db: DB, actorId: string, tenantId: string, bedId: string | null, date: string) {
   await db.transaction(async (tx) => {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
-    if (!p || p.status === "moved_out") throw new AppError("Tenant not found or has moved out");
+    if (!p || p.status === "moved_out") throw new AppError("Tenant not found or has vacated");
     await tx
       .update(bedAssignments)
       .set({ endDate: date })
@@ -104,16 +114,18 @@ export async function moveTenantToBed(db: DB, actorId: string, tenantId: string,
   });
 }
 
-/** Ends the bed assignment and marks the tenant moved out. Invoices and payments are untouched. */
-export async function moveOutTenant(db: DB, actorId: string, tenantId: string, date: string) {
+/** Ends the bed assignment and marks the tenant vacated. Invoices and payments are untouched. */
+export async function vacateTenant(db: DB, actorId: string, tenantId: string, date: string) {
   await db.transaction(async (tx) => {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
-    if (p.status === "moved_out") throw new AppError("Already moved out");
-    if (date < p.joiningDate) throw new AppError("Move-out date is before the joining date");
+    if (p.status === "moved_out") throw new AppError("Already vacated");
+    if (date < p.joiningDate) throw new AppError("Vacate date is before the joining date");
     await tx.update(bedAssignments).set({ endDate: date }).where(and(eq(bedAssignments.tenantId, tenantId), isNull(bedAssignments.endDate)));
     await tx.update(tenantProfiles).set({ status: "moved_out", moveOutDate: date }).where(eq(tenantProfiles.id, tenantId));
     await audit(tx, actorId, "tenant.move_out", "tenant", tenantId, { date });
+    await notifyTenant(tx, tenantId, { type: "vacated", title: "Your stay has ended", body: `You are marked as vacated on ${formatDate(date)}. Your invoices and receipts stay available here.`, href: "/portal/rent" });
+    await notifyAdmins(tx, { type: "vacated", title: "A tenant has vacated", body: `Vacate date ${formatDate(date)}.`, href: `/admin/tenants/${tenantId}` }, actorId);
   });
 }
 
@@ -127,7 +139,7 @@ export async function setTenantLoginActive(db: DB, actorId: string, tenantId: st
 
 export async function resetTenantPassword(db: DB, actorId: string, tenantId: string, password: string) {
   const problem = passwordProblem(password);
-  if (problem) throw new AppError(problem);
+  if (problem) throw new AppError(problem, "password");
   const [p] = await db.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
   if (!p) throw new AppError("Tenant not found");
   await db.update(users).set({ passwordHash: await hashPassword(password), mustChangePassword: true }).where(eq(users.id, p.userId));
@@ -171,6 +183,7 @@ export async function listRoomsWithBeds(q: Q) {
     .leftJoin(bedAssignments, and(eq(bedAssignments.bedId, beds.id), isNull(bedAssignments.endDate)))
     .leftJoin(tenantProfiles, eq(tenantProfiles.id, bedAssignments.tenantId))
     .leftJoin(users, eq(users.id, tenantProfiles.userId))
+    .where(isNull(rooms.archivedAt))
     .orderBy(rooms.name, beds.bedNumber);
   const map = new Map<string, { id: string; name: string; maxOccupancy: number; beds: { id: string; number: number; tenantId: string | null; tenantName: string | null }[] }>();
   for (const r of rows) {

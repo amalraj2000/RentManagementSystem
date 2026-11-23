@@ -22,3 +22,68 @@
   .no-print { display: none !important; }
   body { background: #fff; }
 }
+
+/* ---- 404 dog ---- */
+.dog svg { overflow: visible; }
+.dog-tail { transform-box: fill-box; transform-origin: 0% 100%; animation: dog-wag 0.45s ease-in-out infinite alternate; }
+.dog-ear-l { transform-box: fill-box; transform-origin: 80% 10%; animation: dog-ear-l 2.4s ease-in-out infinite; }
+.dog-ear-r { transform-box: fill-box; transform-origin: 20% 10%; animation: dog-ear-r 2.4s ease-in-out infinite; }
+.dog-head { transform-box: fill-box; transform-origin: 50% 100%; animation: dog-tilt 3.2s ease-in-out infinite; }
+.dog-eye { transform-box: fill-box; transform-origin: 50% 50%; animation: dog-blink 4s infinite; }
+.dog-tongue { transform-box: fill-box; transform-origin: 50% 0%; animation: dog-pant 0.7s ease-in-out infinite alternate; }
+.dog-shadow { transform-box: fill-box; transform-origin: 50% 50%; animation: dog-shadow 3.2s ease-in-out infinite; }
+.dog-paw { animation: dog-paw 3.2s ease-in-out infinite; opacity: 0; }
+.dog-paw:nth-child(2) { animation-delay: 0.4s; }
+.dog-paw:nth-child(3) { animation-delay: 0.8s; }
+.dog-paw:nth-child(4) { animation-delay: 1.2s; }
+.dog-bubble { animation: dog-float 3.2s ease-in-out infinite; }
+@keyframes dog-wag { from { transform: rotate(-22deg); } to { transform: rotate(26deg); } }
+@keyframes dog-ear-l { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(-9deg); } }
+@keyframes dog-ear-r { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(9deg); } }
+@keyframes dog-tilt { 0%, 100% { transform: rotate(0); } 35% { transform: rotate(-7deg); } 70% { transform: rotate(6deg); } }
+@keyframes dog-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.08); } }
+@keyframes dog-pant { from { transform: scaleY(0.75); } to { transform: scaleY(1.15); } }
+@keyframes dog-shadow { 0%, 100% { transform: scaleX(1); } 50% { transform: scaleX(0.96); } }
+@keyframes dog-paw { 0% { opacity: 0; } 20% { opacity: 0.55; } 60% { opacity: 0.55; } 100% { opacity: 0; } }
+@keyframes dog-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .dog *, .dog-paw, .dog-bubble { animation: none !important; }
+  .dog-paw { opacity: 0.4; }
+}
+
+/* ---- Tables become cards on phones (see Table in components/ui) ---- */
+@media (max-width: 639px) {
+  .rt-cards, .rt-cards tbody { display: block; width: 100%; }
+  .rt-cards thead { display: none; }
+  .rt-cards tbody tr {
+    display: block;
+    margin-bottom: 0.75rem;
+    padding: 0.25rem 0;
+    border: 1px solid var(--color-line);
+    border-radius: 0.75rem;
+    background: #fff;
+  }
+  .rt-cards td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.4rem 0.875rem !important;
+    border: 0 !important;
+    white-space: normal !important;
+    text-align: right !important;
+  }
+  .rt-cards td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--color-muted);
+    text-align: left;
+  }
+  .rt-cards td[data-label=""]::before { display: none; }
+  .rt-cards td[data-label=""] { justify-content: flex-end; border-top: 1px solid var(--color-line) !important; margin-top: 0.25rem; padding-top: 0.6rem !important; }
+  /* the first cell is the card's title (name / month) */
+  .rt-cards td:first-child { justify-content: flex-start; text-align: left !important; font-size: 0.95rem; font-weight: 600; padding-top: 0.6rem !important; }
+  .rt-cards td:first-child::before { display: none; }
+}

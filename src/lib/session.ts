@@ -4,6 +4,7 @@ import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getDb } from "@/db/client";
 import { createSession, destroySession, getSessionUser } from "./auth-core";
+import { AppError } from "@/services/common";
 
 const COOKIE = process.env.NODE_ENV === "production" ? "__Host-pg_session" : "pg_session";
 
@@ -17,10 +18,18 @@ export async function setSessionCookie(token: string, expires: Date) {
   });
 }
 
-export async function startSession(userId: string) {
+export async function startSession(userId: string, opts: { impersonatedBy?: string } = {}) {
   const ua = (await headers()).get("user-agent");
-  const { token, expiresAt } = await createSession(getDb(), userId, ua);
+  const { token, expiresAt } = await createSession(getDb(), userId, ua, Date.now(), opts);
   await setSessionCookie(token, expiresAt);
+}
+
+/** Ends the current session cookie + row (used when switching between admin and "viewing as tenant"). */
+export async function dropCurrentSession() {
+  const jar = await cookies();
+  const t = jar.get(COOKIE)?.value;
+  if (t) await destroySession(getDb(), t);
+  jar.delete(COOKIE);
 }
 
 export async function endSession() {
@@ -53,6 +62,13 @@ export async function requireAdmin(): Promise<SessionUser> {
 export async function requireTenant(): Promise<SessionUser> {
   const u = await requireUser();
   if (u.role !== "tenant") redirect("/admin");
+  return u;
+}
+
+/** For tenant actions that CHANGE something. An admin viewing as a tenant is read-only. */
+export async function requireTenantWrite(): Promise<SessionUser> {
+  const u = await requireTenant();
+  if (u.impersonatedBy) throw new AppError("You're viewing as this tenant, so changes are turned off. Use “Back to admin” first.");
   return u;
 }
 

@@ -1,14 +1,16 @@
 import { Pin } from "lucide-react";
-import { Card, Empty, PageHeader } from "@/components/ui";
+import { Card, Empty, PageHeader, Pager } from "@/components/ui";
+import { pageParam, slicePage } from "@/lib/page";
 import { getDb } from "@/db/client";
 import { requireTenant } from "@/lib/session";
 import { listAnnouncements } from "@/services/misc";
 
 export const metadata = { title: "Notices" };
 
-export default async function Notices() {
+export default async function Notices({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
   await requireTenant();
-  const list = await listAnnouncements(getDb(), 50);
+  const page = pageParam((await searchParams).page);
+  const { items: list, total, page: current } = slicePage(await listAnnouncements(getDb(), 500), page);
   return (
     <>
       <PageHeader title="Notices" />
@@ -23,6 +25,7 @@ export default async function Notices() {
           ))}
         </div>
       )}
+      <Pager page={current} total={total} basePath="/portal/notices" />
     </>
   );
 }

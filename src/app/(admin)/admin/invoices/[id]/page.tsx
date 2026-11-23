@@ -61,7 +61,7 @@ export default async function InvoiceDetail({ params }: { params: Promise<{ id: 
               <input type="hidden" name="invoiceId" value={inv.id} />
               <Field label="Type"><Select name="kind" defaultValue="adjustment"><option value="adjustment">Discount / adjustment (reduces total)</option><option value="other">Other charge (adds to total)</option></Select></Field>
               <Field label="Amount (₹)"><Input name="amount" inputMode="decimal" required /></Field>
-              <Field label="Reason"><Input name="description" required maxLength={200} /></Field>
+              <Field label="Reason"><Input name="description" required minLength={3} maxLength={200} /></Field>
             </ActionForm>
           </Card>
         </div>

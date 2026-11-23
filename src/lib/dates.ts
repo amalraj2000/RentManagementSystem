@@ -29,8 +29,20 @@ export function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-IN", { month: "short", year: "numeric", timeZone: "UTC" });
 }
+/** "05 Sept" — day and month only, for tight spaces. */
+export function formatDayMonth(d: string | null | undefined): string {
+  if (!d) return "—";
+  const [y, m, day] = d.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", timeZone: "UTC" });
+}
 export function formatDate(d: string | null | undefined): string {
   if (!d) return "—";
   const [y, m, day] = d.split("-").map(Number);
   return new Date(Date.UTC(y, m - 1, day)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" });
+}
+
+/** "Nov ’26" — compact month for narrow screens. */
+export function monthLabelShort(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  return `${new Date(Date.UTC(y, m - 1, 1)).toLocaleString("en-IN", { month: "short", timeZone: "UTC" })} ’${String(y).slice(2)}`;
 }

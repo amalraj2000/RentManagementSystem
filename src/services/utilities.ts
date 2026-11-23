@@ -27,17 +27,17 @@ export type UtilityInput = {
  */
 export async function createUtilityBill(db: DB, actorId: string, input: UtilityInput) {
   if (input.type === "water" && input.method === "equal_beds") throw new AppError("Water supports equal split or custom amounts");
-  if (!Number.isInteger(input.totalPaise) || input.totalPaise <= 0) throw new AppError("Total must be greater than zero");
+  if (!Number.isInteger(input.totalPaise) || input.totalPaise <= 0) throw new AppError("Total must be greater than zero", "total");
   let units: number | null;
   try {
     units = unitsFromReadings(input.openingReading, input.closingReading);
   } catch (e) {
-    throw new AppError((e as Error).message);
+    throw new AppError((e as Error).message, "closingReading");
   }
   return db.transaction(async (tx) => {
     const existing = await tx.select({ id: utilityBills.id, m: utilityBills.periodMonth }).from(utilityBills).where(eq(utilityBills.type, input.type));
     if (existing.some((e) => e.m === input.periodMonth))
-      throw new AppError(`A ${input.type} bill for ${monthLabel(input.periodMonth)} already exists`);
+      throw new AppError(`A ${input.type} bill for ${monthLabel(input.periodMonth)} already exists`, "periodMonth");
 
     const eligible = await eligibleTenants(tx, input.periodMonth);
     const residentIds = eligible.map((t) => t.id);
@@ -46,7 +46,7 @@ export async function createUtilityBill(db: DB, actorId: string, input: UtilityI
     try {
       shares = allocateUtility(input.totalPaise, input.method, residentIds, bedHolders, input.custom);
     } catch (e) {
-      throw new AppError((e as Error).message);
+      throw new AppError((e as Error).message, "method");
     }
 
     const [bill] = await tx
@@ -97,5 +97,30 @@ export async function deleteUtilityBill(db: DB, actorId: string, billId: string)
     await tx.delete(utilityAllocations).where(eq(utilityAllocations.utilityBillId, billId));
     await tx.delete(utilityBills).where(eq(utilityBills.id, billId));
     await audit(tx, actorId, "utility.delete", "utility_bill", billId, { type: bill.type, month: bill.periodMonth });
+  });
+}
+
+/** Edits dates, readings, reference and notes. The total and split are a financial snapshot: to change them, delete and re-add the bill. */
+export async function updateUtilityDetails(
+  db: DB,
+  actorId: string,
+  id: string,
+  d: { billDate: string; dueDate: string; openingReading?: number | null; closingReading?: number | null; attachmentRef?: string | null; notes?: string | null },
+) {
+  let units: number | null;
+  try {
+    units = unitsFromReadings(d.openingReading, d.closingReading);
+  } catch (e) {
+    throw new AppError((e as Error).message);
+  }
+  await db.transaction(async (tx) => {
+    const [bill] = await tx.select().from(utilityBills).where(eq(utilityBills.id, id));
+    if (!bill) throw new AppError("Bill not found");
+    await tx
+      .update(utilityBills)
+      .set({ billDate: d.billDate, dueDate: d.dueDate, openingReading: d.openingReading ?? null, closingReading: d.closingReading ?? null, unitsConsumed: units, attachmentRef: d.attachmentRef || null, notes: d.notes || null })
+      .where(eq(utilityBills.id, id));
+    await tx.update(expenses).set({ spentOn: d.billDate, receiptRef: d.attachmentRef || null }).where(eq(expenses.utilityBillId, id));
+    await audit(tx, actorId, "utility.update", "utility_bill", id);
   });
 }

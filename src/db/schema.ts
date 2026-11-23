@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { blob, check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
 const createdAt = () => integer("created_at", { mode: "timestamp_ms" }).notNull().$defaultFn(() => new Date());
@@ -17,6 +17,8 @@ export const users = sqliteTable(
     id: id(),
     email: text("email").notNull().unique(),
     name: text("name").notNull(),
+    /** Optional mobile number (shown on the admin's own profile). */
+    phone: text("phone"),
     role: text("role", { enum: ["admin", "tenant"] }).notNull(),
     passwordHash: text("password_hash").notNull(),
     mustChangePassword: integer("must_change_password", { mode: "boolean" }).notNull().default(false),
@@ -26,6 +28,19 @@ export const users = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("users_role_idx").on(t.role)],
+);
+
+/** Profile photo for a login user (used by admins; tenants keep theirs in tenant_documents). Private: served only to the owner and admins. */
+export const userPhotos = sqliteTable(
+  "user_photos",
+  {
+    userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: blob("data", { mode: "buffer" }).notNull(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [check("user_photo_size", sql`${t.sizeBytes} > 0 and ${t.sizeBytes} <= 2097152`)],
 );
 
 export const tenantProfiles = sqliteTable(
@@ -52,6 +67,45 @@ export const tenantProfiles = sqliteTable(
   ],
 );
 
+/** Private files (photo, ID proofs). Stored in the DB so nothing needs a public URL; served only via the auth-checked /api/documents/[id] route. */
+export const tenantDocuments = sqliteTable(
+  "tenant_documents",
+  {
+    id: id(),
+    tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["photo", "id_proof"] }).notNull(),
+    /** For ID proofs: aadhaar, pan, voter, driving_licence, passport, college_id, other */
+    idType: text("id_type"),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: blob("data", { mode: "buffer" }).notNull(),
+    uploadedBy: text("uploaded_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("tenant_docs_tenant_idx").on(t.tenantId),
+    // At most one profile photo per tenant (replacing = delete + insert in one transaction).
+    uniqueIndex("tenant_photo_uq").on(t.tenantId).where(sql`${t.kind} = 'photo'`),
+    check("doc_size_range", sql`${t.sizeBytes} > 0 and ${t.sizeBytes} <= 2097152`),
+  ],
+);
+
+/** Photos for the PUBLIC landing page. Served without login by /api/site-photos/[id]; only owner-chosen images go here. */
+export const sitePhotos = sqliteTable(
+  "site_photos",
+  {
+    id: id(),
+    caption: text("caption").notNull().default(""),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: blob("data", { mode: "buffer" }).notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: createdAt(),
+  },
+  (t) => [index("site_photos_order_idx").on(t.sortOrder, t.createdAt), check("site_photo_size", sql`${t.sizeBytes} > 0 and ${t.sizeBytes} <= 2097152`)],
+);
+
 export const rooms = sqliteTable(
   "rooms",
   {
@@ -59,6 +113,8 @@ export const rooms = sqliteTable(
     name: text("name").notNull().unique(),
     maxOccupancy: integer("max_occupancy").notNull().default(4),
     hasAttachedBathroom: integer("has_attached_bathroom", { mode: "boolean" }).notNull().default(true),
+    /** Set when an owner "removes" a room that has history: hidden from lists/capacity, but bed history is kept. */
+    archivedAt: integer("archived_at", { mode: "timestamp_ms" }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -109,6 +165,15 @@ export const rentSettings = sqliteTable(
     waterMethod: text("water_method", { enum: ["equal_residents", "custom"] }).notNull().default("equal_residents"),
     houseRules: text("house_rules").notNull().default(""),
     contactInfo: text("contact_info").notNull().default(""),
+    // Public landing page (intentionally public — the owner chooses what to show)
+    pgName: text("pg_name").notNull().default("Our PG"),
+    tagline: text("tagline").notNull().default(""),
+    about: text("about").notNull().default(""),
+    address: text("address").notNull().default(""),
+    contactPhone: text("contact_phone").notNull().default(""),
+    whatsapp: text("whatsapp").notNull().default(""),
+    contactEmail: text("contact_email").notNull().default(""),
+    mapsLink: text("maps_link").notNull().default(""),
     updatedAt: updatedAt(),
   },
   (t) => [check("rent_settings_single", sql`${t.id} = 1`), check("due_day_range", sql`${t.dueDayOfMonth} between 1 and 28`)],
@@ -146,10 +211,12 @@ export const invoiceItems = sqliteTable(
     /** Negative for discounts/adjustments. */
     amountPaise: integer("amount_paise").notNull(),
     utilityBillId: text("utility_bill_id").references(() => utilityBills.id, { onDelete: "restrict" }),
+    expenseId: text("expense_id").references(() => expenses.id, { onDelete: "restrict" }),
     createdAt: createdAt(),
   },
   (t) => [
     index("invoice_items_invoice_idx").on(t.invoiceId),
+    uniqueIndex("invoice_item_expense_uq").on(t.invoiceId, t.expenseId).where(sql`${t.expenseId} is not null`),
     uniqueIndex("invoice_item_utility_uq").on(t.invoiceId, t.utilityBillId).where(sql`${t.utilityBillId} is not null`),
     uniqueIndex("invoice_item_rent_uq").on(t.invoiceId).where(sql`${t.kind} = 'rent'`),
   ],
@@ -177,6 +244,37 @@ export const payments = sqliteTable(
     index("payments_tenant_idx").on(t.tenantId, t.paidOn),
     index("payments_paid_on_idx").on(t.paidOn),
     check("payment_positive", sql`${t.amountPaise} > 0`),
+  ],
+);
+
+/** A payment the TENANT says they made. It is NOT money received until an admin approves it (which creates a real `payments` row). */
+export const paymentClaims = sqliteTable(
+  "payment_claims",
+  {
+    id: id(),
+    invoiceId: text("invoice_id").notNull().references(() => invoices.id, { onDelete: "restrict" }),
+    tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "restrict" }),
+    amountPaise: integer("amount_paise").notNull(),
+    paidOn: text("paid_on").notNull(),
+    method: text("method", { enum: ["cash", "upi", "bank_transfer", "other"] }).notNull(),
+    reference: text("reference"),
+    note: text("note"),
+    screenshot: blob("screenshot", { mode: "buffer" }),
+    screenshotMime: text("screenshot_mime"),
+    screenshotName: text("screenshot_name"),
+    status: text("status", { enum: ["pending", "approved", "rejected"] }).notNull().default("pending"),
+    rejectReason: text("reject_reason"),
+    reviewedBy: text("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: integer("reviewed_at", { mode: "timestamp_ms" }),
+    paymentId: text("payment_id").references(() => payments.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("claims_tenant_idx").on(t.tenantId, t.createdAt),
+    index("claims_status_idx").on(t.status, t.createdAt),
+    index("claims_invoice_idx").on(t.invoiceId),
+    check("claim_positive", sql`${t.amountPaise} > 0`),
+    check("claim_shot_size", sql`${t.screenshot} is null or length(${t.screenshot}) <= 2097152`),
   ],
 );
 
@@ -227,12 +325,14 @@ export const expenses = sqliteTable(
   {
     id: id(),
     category: text("category", {
-      enum: ["electricity", "water", "cleaning", "repairs", "internet", "other"],
+      enum: ["electricity", "water", "cooking_gas", "cleaning", "repairs", "internet", "other"],
     }).notNull(),
     amountPaise: integer("amount_paise").notNull(),
     spentOn: text("spent_on").notNull(),
     description: text("description").notNull(),
     receiptRef: text("receipt_ref"),
+    /** none = owner's own cost; equal/custom = also billed to tenants (see expense_allocations). */
+    shareMode: text("share_mode", { enum: ["none", "equal", "custom"] }).notNull().default("none"),
     /** Auto-created expense mirroring a utility bill (so it is never double counted). */
     utilityBillId: text("utility_bill_id").unique().references(() => utilityBills.id, { onDelete: "cascade" }),
     createdBy: text("created_by").references(() => users.id),
@@ -240,6 +340,38 @@ export const expenses = sqliteTable(
     updatedAt: updatedAt(),
   },
   (t) => [index("expenses_spent_on_idx").on(t.spentOn), check("expense_positive", sql`${t.amountPaise} > 0`)],
+);
+
+/** Each tenant's share of a shared expense — a snapshot, like utility_allocations. */
+export const expenseAllocations = sqliteTable(
+  "expense_allocations",
+  {
+    id: id(),
+    expenseId: text("expense_id").notNull().references(() => expenses.id, { onDelete: "cascade" }),
+    tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "restrict" }),
+    amountPaise: integer("amount_paise").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    uniqueIndex("expense_alloc_uq").on(t.expenseId, t.tenantId),
+    index("expense_alloc_tenant_idx").on(t.tenantId),
+    check("expense_alloc_positive", sql`${t.amountPaise} > 0`),
+  ],
+);
+
+/** Optional receipt image for an expense. Kept out of `expenses` so list queries never load image bytes. Admin-only via /api/receipts/[id]. */
+export const expenseReceipts = sqliteTable(
+  "expense_receipts",
+  {
+    id: id(),
+    expenseId: text("expense_id").notNull().unique().references(() => expenses.id, { onDelete: "cascade" }),
+    fileName: text("file_name").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sizeBytes: integer("size_bytes").notNull(),
+    data: blob("data", { mode: "buffer" }).notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [check("receipt_size_range", sql`${t.sizeBytes} > 0 and ${t.sizeBytes} <= 2097152`)],
 );
 
 export const announcements = sqliteTable(
@@ -264,6 +396,8 @@ export const sessions = sqliteTable(
     userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }).notNull(),
     userAgent: text("user_agent"),
+    /** Set when an admin is viewing the app AS this user (read-only, short-lived). */
+    impersonatedBy: text("impersonated_by").references(() => users.id, { onDelete: "cascade" }),
     createdAt: createdAt(),
   },
   (t) => [index("sessions_user_idx").on(t.userId), index("sessions_expires_idx").on(t.expiresAt)],
@@ -275,6 +409,26 @@ export const loginAttempts = sqliteTable("login_attempts", {
   windowStart: integer("window_start", { mode: "timestamp_ms" }).notNull(),
   lockedUntil: integer("locked_until", { mode: "timestamp_ms" }),
 });
+
+/** In-app notifications. `dedupeKey` makes event hooks and the daily reminder job idempotent per user. */
+export const notifications = sqliteTable(
+  "notifications",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    href: text("href"),
+    dedupeKey: text("dedupe_key"),
+    readAt: integer("read_at", { mode: "timestamp_ms" }),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    index("notif_user_idx").on(t.userId, t.readAt, t.createdAt),
+    uniqueIndex("notif_dedupe_uq").on(t.userId, t.dedupeKey).where(sql`${t.dedupeKey} is not null`),
+  ],
+);
 
 export const auditLogs = sqliteTable(
   "audit_logs",

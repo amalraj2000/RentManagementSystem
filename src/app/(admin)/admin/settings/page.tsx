@@ -1,4 +1,5 @@
 import { ActionForm } from "@/components/action-form";
+import { SettingsTabs } from "@/components/settings-tabs";
 import { Card, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
 import { updateSettingsAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
@@ -12,6 +13,7 @@ export default async function SettingsPage() {
   return (
     <>
       <PageHeader title="Settings" />
+      <SettingsTabs current="general" />
       <Card className="max-w-2xl p-5">
         <ActionForm action={updateSettingsAction} reset={false} className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">

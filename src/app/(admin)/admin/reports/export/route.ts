@@ -4,6 +4,7 @@ import { expenses, invoices, payments, tenantProfiles, users } from "@/db/schema
 import { getCurrentUser } from "@/lib/session";
 import { monthEnd, monthStart, MONTH_RE } from "@/lib/dates";
 import { monthlySummary } from "@/services/reports";
+import { categoryLabel } from "@/lib/categories";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +62,7 @@ export async function GET(req: Request) {
     ...pays.map((p) => [p.date, p.name, p.period, rupees(p.amount), p.method, p.ref ?? "", p.receipt]),
     [],
     ["EXPENSES"], ["Date", "Category", "Description", "Amount", "Receipt ref"],
-    ...exps.map((e) => [e.spentOn, e.category, e.description, rupees(e.amountPaise), e.receiptRef ?? ""]),
+    ...exps.map((e) => [e.spentOn, categoryLabel(e.category), e.description, rupees(e.amountPaise), e.receiptRef ?? ""]),
   ];
   const body = "﻿" + L.map((r) => r.map(cell).join(",")).join("\r\n") + "\r\n";
   return new Response(body, {

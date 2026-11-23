@@ -1,8 +1,6 @@
-import { UtilityPage } from "@/components/utility-page";
-import { pageParam } from "@/lib/page";
+import { redirect } from "next/navigation";
 
-export const metadata = { title: "Electricity" };
-
-export default async function Page({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
-  return <UtilityPage type="electricity" page={pageParam((await searchParams).page)} />;
+// Electricity & water are managed from Expenses (category + "Share with tenants"). Kept only so old links keep working.
+export default function Page() {
+  redirect("/admin/expenses");
 }

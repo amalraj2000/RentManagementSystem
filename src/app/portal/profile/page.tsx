@@ -7,6 +7,8 @@ import { formatINR } from "@/lib/money";
 import { requireTenant } from "@/lib/session";
 import { getSettings } from "@/services/billing";
 import { tenantForUser } from "@/services/portal";
+import { listDocuments } from "@/services/documents";
+import { DocumentsCard } from "@/components/documents-card";
 
 export const metadata = { title: "Profile" };
 
@@ -14,6 +16,7 @@ export default async function Profile() {
   const user = await requireTenant();
   const db = getDb();
   const [me, settings] = await Promise.all([tenantForUser(db, user.id), getSettings(db)]);
+  const docs = me ? await listDocuments(db, me.id) : [];
   return (
     <>
       <PageHeader title="Profile" />
@@ -23,7 +26,7 @@ export default async function Profile() {
           {me && (
             <dl className="space-y-2 text-sm">
               {([
-                ["Name", me.name], ["Email", me.email], ["Phone", me.phone],
+                ["Name", me.name], ["Email", me.email], ["Mobile number", me.phone],
                 ["Room", me.roomName ? `${me.roomName} · Bed ${me.bedNumber}` : "Not assigned"],
                 ["Joined", formatDate(me.joiningDate)], ["Monthly rent", formatINR(me.monthlyRentPaise)], ["Security deposit", formatINR(me.securityDepositPaise)],
                 ["Emergency contact", me.emergencyContactName ? `${me.emergencyContactName} (${me.emergencyContactPhone ?? "—"})` : "—"],
@@ -37,10 +40,11 @@ export default async function Profile() {
           <h2 className="mb-3 text-sm font-semibold">Change password</h2>
           <ActionForm action={changePassword} submit="Update password" className="space-y-3">
             <Field label="Current password"><Input name="current" type="password" autoComplete="current-password" required /></Field>
-            <Field label="New password" hint="At least 10 characters with letters and numbers."><Input name="next" type="password" autoComplete="new-password" minLength={10} required /></Field>
+            <Field label="New password" hint="At least 10 characters."><Input name="next" type="password" autoComplete="new-password" minLength={10} required /></Field>
             <Field label="Confirm new password"><Input name="confirm" type="password" autoComplete="new-password" required /></Field>
           </ActionForm>
         </Card>
+        {me && <DocumentsCard tenantId={me.id} name={me.name} docs={docs} readOnly self />}
         <Card className="p-5">
           <h2 className="mb-2 text-sm font-semibold">House rules</h2>
           <p className="whitespace-pre-line text-sm text-slate-700">{settings.houseRules || "No rules posted yet."}</p>
