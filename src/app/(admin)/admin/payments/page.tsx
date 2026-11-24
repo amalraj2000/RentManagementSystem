@@ -10,43 +10,32 @@ import { formatINR, paiseToInput } from "@/lib/money";
 import { methodLabel } from "@/lib/payment-methods";
 import { pageParam, slicePage } from "@/lib/page";
 import { requireAdmin } from "@/lib/session";
-import { MarkPaidButton } from "@/components/mark-paid-button";
-import { RevertPaidButton } from "@/components/revert-paid-button";
-import { MonthPicker } from "@/components/month-picker";
-import { monthParam } from "@/lib/page";
-import { currentMonth, todayISO } from "@/lib/dates";
-import { paymentBoard, paymentsByTenant, unpaidItemsByTenant } from "@/services/reports";
+import { monthList } from "@/services/reports";
 import { type ActivityFilter, FILTERS, filterCounts, matchesFilter, paymentActivity } from "@/services/payment-activity";
 
 export const metadata = { title: "Payments" };
 
 const TAB_LABEL: Record<ActivityFilter, string> = { all: "All payments", waiting: "Waiting for confirmation", paid: "Paid", cancelled: "Cancelled" };
 
-export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string; month?: string }> }) {
+export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string }> }) {
   await requireAdmin();
   const sp = await searchParams;
-  const board = !sp.show || sp.show === "tenants"; // the default view: active tenants and whether they have paid
+  const board = !sp.show || sp.show === "months"; // the default view: the list of months
   const show: ActivityFilter = (FILTERS as string[]).includes(sp.show ?? "") ? (sp.show as ActivityFilter) : "all";
-  const month = monthParam(sp.month);
   const all = await paymentActivity(getDb());
   const counts = filterCounts(all);
   const { items, total, page } = slicePage(all.filter((r) => matchesFilter(r, show)), pageParam(sp.page));
   const tabHref = (f: ActivityFilter) => `/admin/payments?show=${f}`;
-  const today = todayISO();
-  const tenants = board ? await paymentBoard(getDb(), month, today) : [];
-  const waitingBy = new Map<string, number>();
-  for (const r of all) if (r.status === "waiting") waitingBy.set(r.tenantId, (waitingBy.get(r.tenantId) ?? 0) + 1);
-  const ids = tenants.map((t) => t.tenantId); // empty when not on the tenants view, so nothing extra is fetched
-  const [unpaid, paid] = await Promise.all([unpaidItemsByTenant(getDb(), ids), paymentsByTenant(getDb(), ids, 200)]);
+  const monthRows = board ? await monthList(getDb(), all) : [];
   return (
     <>
       <PageHeader
         title="Payments"
-        description={board ? `Who has paid for ${monthLabel(month)}` : "Payments you recorded and payments tenants say they made — all in one place."}
-        actions={<>{board && <MonthPicker value={month} basePath="/admin/payments" />}<Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>}
+        description={board ? "Pick a month to see who has paid." : "Payments you recorded and payments tenants say they made — all in one place."}
+        actions={<><Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>}
       />
       <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter payments">
-        <Link href="/admin/payments" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Tenants</Link>
+        <Link href="/admin/payments" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Months</Link>
         {FILTERS.map((f) => (
           <Link key={f} href={tabHref(f)} role="tab" aria-selected={!board && show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${!board && show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
             {TAB_LABEL[f]}
@@ -55,34 +44,19 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
         ))}
       </div>
       {board ? (
-        tenants.length === 0 ? <Empty>No active tenants yet.</Empty> : (
+        monthRows.length === 0 ? <Empty>No months yet.</Empty> : (
           <Table>
-            <thead><tr><Th>Tenant</Th><Th>Rent</Th><Th className="text-right">Action</Th></tr></thead>
+            <thead><tr><Th>Month</Th><Th>Paid</Th><Th className="text-right">Collected</Th><Th>Waiting</Th><Th className="text-right">Action</Th></tr></thead>
             <tbody>
-              {tenants.map((t) => {
-                const items = (unpaid.get(t.tenantId) ?? []).filter((i) => i.month === month);
-                const mine = (paid.get(t.tenantId) ?? []).filter((p) => p.month === month);
-                return (
-                  <tr key={t.tenantId}>
-                    <Td>
-                      <Link className="font-medium hover:underline" href={`/admin/payments/tenant/${t.tenantId}`}>{t.name}</Link>
-                      {(waitingBy.get(t.tenantId) ?? 0) > 0 && <Link href={`/admin/payments/tenant/${t.tenantId}`} className="mt-1 block text-xs font-medium text-amber-700 hover:underline">{waitingBy.get(t.tenantId)} waiting for you to confirm</Link>}
-                    </Td>
-                    <Td>
-                      {!t.rent || t.rent.state === "none" ? <span className="text-muted">{t.invoiceId ? "—" : "No bill yet"}</span> : (
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="tabular-nums">{formatINR(t.rent.amount)}</span><Badge kind={t.rent.state} /></div>
-                      )}
-                    </Td>
-                    <Td>
-                      <RowActions>
-                        <Link href={`/admin/payments/tenant/${t.tenantId}`} title="View payments" aria-label="View payments" className={iconButtonClass()}><Eye className="size-4" aria-hidden /></Link>
-                        <MarkPaidButton name={t.name} items={items} />
-                        <RevertPaidButton name={t.name} rows={mine.map((p) => ({ id: p.id, what: `Rent · ${monthLabel(p.month)}`, amount: p.amount, paidOn: p.paidOn, method: p.method }))} />
-                      </RowActions>
-                    </Td>
-                  </tr>
-                );
-              })}
+              {monthRows.map((m) => (
+                <tr key={m.month}>
+                  <Td><Link className="font-medium hover:underline" href={`/admin/payments/month/${m.month}`}>{monthLabel(m.month)}</Link></Td>
+                  <Td>{m.bills === 0 ? <span className="text-muted">No bills yet</span> : `${m.paidBills} of ${m.bills} paid`}</Td>
+                  <Td className="text-right tabular-nums">{formatINR(m.collected)}</Td>
+                  <Td>{m.waiting > 0 ? <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">{m.waiting}</span> : <span className="text-muted">—</span>}</Td>
+                  <Td><RowActions><Link href={`/admin/payments/month/${m.month}`} title="View month" aria-label="View month" className={iconButtonClass()}><Eye className="size-4" aria-hidden /></Link></RowActions></Td>
+                </tr>
+              ))}
             </tbody>
           </Table>
         )

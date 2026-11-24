@@ -6,8 +6,6 @@ import { Badge, Card, PageHeader } from "@/components/ui";
 import { updateTenantAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { bedAssignments, beds, rooms, tenantProfiles, users } from "@/db/schema";
-import { unpaidItemsByTenant } from "@/services/reports";
-import { MarkPaidButton } from "@/components/mark-paid-button";
 import { formatDate } from "@/lib/dates";
 import { listRoomsWithBeds } from "@/services/tenants";
 import { listDocuments } from "@/services/documents";
@@ -24,7 +22,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
     .where(eq(tenantProfiles.id, id));
   if (!row) notFound();
   const { p } = row;
-  const [current, rooms_, docs, unpaid] = await Promise.all([
+  const [current, rooms_, docs] = await Promise.all([
     db
       .select({ room: rooms.name, bed: beds.bedNumber, bedId: beds.id })
       .from(bedAssignments)
@@ -34,7 +32,6 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
       .then((r) => r[0]),
     listRoomsWithBeds(db),
     listDocuments(db, id),
-    unpaidItemsByTenant(db, [id]),
   ]);
   const movedOut = p.status === "moved_out";
   const photo = docs.find((d) => d.kind === "photo");
@@ -44,7 +41,7 @@ export default async function TenantPage({ params }: { params: Promise<{ id: str
       <PageHeader
         title={row.name}
         description={current ? `${current.room} · Bed ${current.bed}` : movedOut ? `Vacated ${formatDate(p.moveOutDate)}` : "No bed assigned"}
-        actions={<><MarkPaidButton name={row.name} items={unpaid.get(id) ?? []} /><Badge kind={p.status} /></>}
+        actions={<Badge kind={p.status} />}
       />
       <Card className="max-w-3xl p-5">
         <ActionForm action={update} submit="Save changes" reset={false}>

@@ -1,7 +1,8 @@
 import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, sql, type SQL } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { bedAssignments, invoices, payments, rooms, tenantProfiles, users } from "@/db/schema";
-import { addMonths, monthEnd, monthStart } from "@/lib/dates";
+import { addMonths, currentMonth, monthEnd, monthStart } from "@/lib/dates";
+import { monthsBetween } from "@/lib/billing";
 
 const outstandingExpr = sql<number>`coalesce(sum(max(${invoices.totalPaise} - ${invoices.paidPaise}, 0)), 0)`;
 
@@ -184,4 +185,32 @@ export async function monthlySummary(db: DB, fromMonth: string, toMonth: string)
     if (row) row.collected = Number(p.total);
   }
   return [...rows.values()];
+}
+
+/**
+ * Every month from the first tenant's joining month (or first bill) up to this month, newest first,
+ * with how many bills are paid, the cash collected in it, and how many reported payments wait for the owner.
+ */
+export async function monthList(db: DB, activity: { status: string; month: string }[]) {
+  const [first] = await db.select({ d: sql<string | null>`min(${tenantProfiles.joiningDate})` }).from(tenantProfiles);
+  const [firstBill] = await db.select({ m: sql<string | null>`min(${invoices.periodMonth})` }).from(invoices);
+  const now = currentMonth();
+  const start = [first?.d?.slice(0, 7), firstBill?.m].filter((x): x is string => !!x).sort()[0] ?? now;
+  const bills = await invoiceBalances(db);
+  const cash = await db
+    .select({ m: sql<string>`substr(${payments.paidOn}, 1, 7)`, n: sql<number>`coalesce(sum(${payments.amountPaise}), 0)` })
+    .from(payments)
+    .where(isNull(payments.voidedAt))
+    .groupBy(sql`substr(${payments.paidOn}, 1, 7)`);
+  const cashBy = new Map(cash.map((c) => [c.m, Number(c.n)]));
+  return monthsBetween(start, now < start ? start : now).map((month) => {
+    const mine = bills.filter((b) => b.periodMonth === month && b.totalPaise > 0);
+    return {
+      month,
+      bills: mine.length,
+      paidBills: mine.filter((b) => b.balance <= 0).length,
+      collected: cashBy.get(month) ?? 0,
+      waiting: activity.filter((a) => a.status === "waiting" && a.month === month).length,
+    };
+  });
 }
