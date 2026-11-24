@@ -1,13 +1,14 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Armchair, Bath, BedDouble, ImageIcon, Mail, MapPin, MessageCircle, Phone, Refrigerator, Sofa, Utensils, WashingMachine, Droplets, Wifi, Cctv } from "lucide-react";
+import { Armchair, Bath, BedDouble, Mail, MapPin, MessageCircle, Phone, Refrigerator, Sofa, Utensils, WashingMachine, Droplets, Wifi, Cctv } from "lucide-react";
 import { LogoMark } from "@/components/logo";
+import { HouseScene } from "@/components/house-scene";
 import { LoginModal, LoginTrigger } from "@/components/login-modal";
 import { PoweredBy } from "@/components/powered-by";
 import { getDb } from "@/db/client";
 import { whatsappNumber } from "@/lib/share";
 import { roomSummaries } from "@/services/rooms";
-import { DEFAULT_WEBSITE, getHiddenFacilities, getWebsiteInfo, listSitePhotos } from "@/services/website";
+import { DEFAULT_WEBSITE, getHiddenFacilities, getWebsiteInfo } from "@/services/website";
 
 // Public page: rebuilt at most every 5 minutes, and immediately when the owner saves changes under Admin → Website.
 export const revalidate = 300;
@@ -15,10 +16,10 @@ export const revalidate = 300;
 async function load() {
   try {
     const db = getDb();
-    const [info, photos, rooms, hidden] = await Promise.all([getWebsiteInfo(db), listSitePhotos(db), roomSummaries(db), getHiddenFacilities(db)]);
-    return { info, photos, rooms, hidden };
+    const [info, rooms, hidden] = await Promise.all([getWebsiteInfo(db), roomSummaries(db), getHiddenFacilities(db)]);
+    return { info, rooms, hidden };
   } catch {
-    return { info: DEFAULT_WEBSITE, photos: [], rooms: [], hidden: [] as string[] }; // never break the home page if the database is unreachable
+    return { info: DEFAULT_WEBSITE, rooms: [], hidden: [] as string[] }; // never break the home page if the database is unreachable
   }
 }
 
@@ -30,7 +31,7 @@ export async function generateMetadata(): Promise<Metadata> {
 const btn = "inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-5 text-sm font-semibold transition-colors";
 
 export default async function Landing() {
-  const { info, photos, rooms, hidden } = await load();
+  const { info, rooms, hidden } = await load();
   const beds = rooms.reduce((a, r) => a + r.beds, 0);
   const allBathrooms = rooms.length > 0 && rooms.every((r) => r.bathroom);
   const wa = whatsappNumber(info.whatsapp);
@@ -55,7 +56,6 @@ export default async function Landing() {
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4 sm:px-6">
           <span className="flex min-w-0 items-center gap-2.5 text-base font-semibold tracking-tight"><LogoMark className="size-8" /><span className="truncate">{info.pgName}</span></span>
           <nav className="flex items-center gap-1 text-sm">
-            <a href="#gallery" className="hidden rounded-lg px-3 py-2 font-medium text-slate-600 hover:bg-slate-100 sm:inline">Photos</a>
             <a href="#contact" className="hidden rounded-lg px-3 py-2 font-medium text-slate-600 hover:bg-slate-100 sm:inline">Contact</a>
             <LoginTrigger className={`${btn} min-h-9 bg-accent px-4 text-white hover:bg-accent-hover`}>Login</LoginTrigger>
           </nav>
@@ -63,7 +63,8 @@ export default async function Landing() {
       </header>
 
       <section className="border-b border-line bg-gradient-to-b from-accent-soft/50 to-white">
-        <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-20">
+        <div className="mx-auto grid max-w-6xl items-center gap-8 px-4 py-12 sm:px-6 sm:py-16 md:grid-cols-2">
+          <div>
           <p className="mb-3 inline-block rounded-full bg-white px-3 py-1 text-xs font-medium text-accent ring-1 ring-inset ring-accent/20">Ladies&apos; PG accommodation</p>
           <h1 className="max-w-2xl text-3xl font-semibold tracking-tight sm:text-5xl">{info.pgName}</h1>
           {info.tagline && <p className="mt-4 max-w-xl text-base text-slate-600 sm:text-lg">{info.tagline}</p>}
@@ -72,27 +73,9 @@ export default async function Landing() {
             {info.contactPhone && <a href={`tel:${info.contactPhone.replace(/\s/g, "")}`} className={`${btn} border border-line bg-white hover:bg-slate-50`}><Phone className="size-4" aria-hidden /> Call us</a>}
             {wa && <a href={`https://wa.me/${wa}?text=${encodeURIComponent(`Hi, I'd like to know more about ${info.pgName}.`)}`} target="_blank" rel="noopener noreferrer" className={`${btn} border border-line bg-white hover:bg-slate-50`}><MessageCircle className="size-4 text-emerald-600" aria-hidden /> WhatsApp</a>}
           </div>
-        </div>
-      </section>
-
-      <section id="gallery" className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
-        <h2 className="text-xl font-semibold">Photos</h2>
-        {photos.length === 0 ? (
-          <div className="mt-4 grid place-items-center rounded-xl border border-dashed border-line bg-slate-50 py-14 text-center text-sm text-muted">
-            <ImageIcon className="mb-2 size-8" aria-hidden />
-            Photos coming soon.
           </div>
-        ) : (
-          <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
-            {photos.map((p, i) => (
-              <li key={p.id} className="overflow-hidden rounded-xl border border-line bg-slate-50">
-                {/* eslint-disable-next-line @next/next/no-img-element -- owner-uploaded images from our own route */}
-                <img src={`/api/site-photos/${p.id}`} alt={p.caption || `${info.pgName} photo ${i + 1}`} loading={i < 2 ? "eager" : "lazy"} decoding="async" width={800} height={600} className="aspect-[4/3] w-full object-cover" />
-                {p.caption && <p className="px-3 py-2 text-xs text-slate-600">{p.caption}</p>}
-              </li>
-            ))}
-          </ul>
-        )}
+          <HouseScene name={info.pgName} />
+        </div>
       </section>
 
       {(facilities.length > 0 || info.about) && <section className="border-y border-line bg-slate-50">

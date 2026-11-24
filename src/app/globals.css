@@ -97,3 +97,21 @@
   .rt-cards td:first-child { justify-content: flex-start; text-align: left !important; font-size: 0.95rem; font-weight: 600; padding-top: 0.6rem !important; }
   .rt-cards td:first-child::before { display: none; }
 }
+
+/* ---- Landing page house scene ---- */
+.house-scene svg { overflow: visible; }
+.hs-sun { transform-box: fill-box; transform-origin: 50% 50%; animation: hs-spin 24s linear infinite; }
+.hs-cloud { animation: hs-drift 14s ease-in-out infinite alternate; }
+.hs-glow { animation: hs-glow 3.6s ease-in-out infinite alternate; }
+.hs-glow-b { animation-delay: 1.4s; }
+.hs-smoke { transform-box: fill-box; transform-origin: 50% 50%; opacity: 0; animation: hs-smoke 4.2s ease-out infinite; }
+.hs-smoke-2 { animation-delay: 1.4s; }
+.hs-smoke-3 { animation-delay: 2.8s; }
+@keyframes hs-spin { to { transform: rotate(360deg); } }
+@keyframes hs-drift { from { transform: translateX(-26px); } to { transform: translateX(26px); } }
+@keyframes hs-glow { from { fill: #fde68a; } to { fill: #fef9c3; } }
+@keyframes hs-smoke { 0% { opacity: 0.8; transform: translate(0, 0) scale(0.6); } 100% { opacity: 0; transform: translate(14px, -34px) scale(1.7); } }
+@media (prefers-reduced-motion: reduce) {
+  .house-scene *, .house-scene .dog-tail, .house-scene .dog-head { animation: none !important; }
+  .hs-smoke { opacity: 0.5; }
+}
