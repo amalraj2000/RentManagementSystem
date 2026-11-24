@@ -6,9 +6,10 @@ import { getDb } from "@/db/client";
 import { run, fd } from "@/lib/action";
 import { requireAdmin, requireTenantWrite } from "@/lib/session";
 import * as S from "@/lib/schemas";
+import { EXPENSE_TYPES } from "@/lib/expense-types";
 import { createExpense, deleteExpense, markSharePaid, reportSharePaid, revertSharePaid, updateExpense } from "@/services/expenses";
 
-const expenseSchema = z.object({ title: S.text(120).min(2, "Enter what the expense is for"), amount: S.positiveMoney, expenseDate: S.date, note: S.optText(500) });
+const expenseSchema = z.object({ title: z.enum(EXPENSE_TYPES, { error: "Choose what the expense is for" }), amount: S.positiveMoney, expenseDate: S.date, note: S.optText(500) });
 const refresh = () => {
   revalidatePath("/admin", "layout");
   revalidatePath("/portal", "layout");
