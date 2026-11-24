@@ -11,9 +11,9 @@ import { methodLabel } from "@/lib/payment-methods";
 import { pageParam, slicePage } from "@/lib/page";
 import { requireAdmin } from "@/lib/session";
 import { monthList } from "@/services/reports";
-import { type ActivityFilter, FILTERS, filterCounts, matchesFilter, paymentActivity } from "@/services/payment-activity";
+import { type ActivityFilter, filterCounts, matchesFilter, paymentActivity } from "@/services/payment-activity";
 
-export const metadata = { title: "Payments" };
+export const metadata = { title: "Rent" };
 
 const TAB_LABEL: Record<ActivityFilter, string> = { all: "All payments", waiting: "Waiting for confirmation", paid: "Paid", cancelled: "Cancelled" };
 
@@ -21,7 +21,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
   await requireAdmin();
   const sp = await searchParams;
   const board = !sp.show || sp.show === "months"; // the default view: the list of months
-  const show: ActivityFilter = (FILTERS as string[]).includes(sp.show ?? "") ? (sp.show as ActivityFilter) : "all";
+  const show: ActivityFilter = sp.show === "cancelled" ? "cancelled" : "all";
   const all = await paymentActivity(getDb());
   const counts = filterCounts(all);
   const { items, total, page } = slicePage(all.filter((r) => matchesFilter(r, show)), pageParam(sp.page));
@@ -30,13 +30,13 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
   return (
     <>
       <PageHeader
-        title="Payments"
+        title="Rent"
         description={board ? "Pick a month to see who has paid." : "Payments you recorded and payments tenants say they made — all in one place."}
         actions={<><Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>}
       />
-      <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Filter payments">
+      <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Rent views">
         <Link href="/admin/payments" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Months</Link>
-        {FILTERS.map((f) => (
+        {(["cancelled"] as ActivityFilter[]).map((f) => (
           <Link key={f} href={tabHref(f)} role="tab" aria-selected={!board && show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${!board && show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
             {TAB_LABEL[f]}
             <span className={`rounded-full px-1.5 text-[11px] font-semibold ${f === "waiting" && counts.waiting > 0 ? "bg-red-600 text-white" : "bg-slate-100 text-slate-600"}`}>{counts[f]}</span>

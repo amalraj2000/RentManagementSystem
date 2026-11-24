@@ -37,7 +37,7 @@ export default async function TenantPayments({ params }: { params: Promise<{ id:
   const methodField = <div className="mt-3"><span className="mb-1.5 block text-sm font-medium">How was it paid?</span><ChoiceChips name="method" label="How was it paid" options={METHOD_CHOICES} defaultValue="upi" /></div>;
   return (
     <>
-      <BackLink href="/admin/payments" label="Payments" />
+      <BackLink href="/admin/payments" label="Rent" />
       <PageHeader title={t.name} description="Payments, one by one" actions={<Link href={`/admin/tenants/${id}`} className="text-sm font-medium text-accent hover:underline">Tenant details</Link>} />
 
       {waiting.length > 0 && (

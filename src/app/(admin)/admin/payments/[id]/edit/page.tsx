@@ -17,7 +17,7 @@ export default async function EditPayment({ params }: { params: Promise<{ id: st
   if (p.voidedAt) redirect("/admin/payments");
   return (
     <>
-      <BackLink href="/admin/payments" label="Payments" />
+      <BackLink href="/admin/payments" label="Rent" />
       <PageHeader title={`Edit payment · ${p.receiptNo}`} description={`${formatINR(p.amountPaise)}. The amount is locked to keep receipts accurate — to correct it, void this payment and record a new one.`} />
       <Card className="max-w-lg p-5">
         <ActionForm action={updatePaymentAction.bind(null, id)} redirectTo="/admin/payments" reset={false} className="space-y-3">

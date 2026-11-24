@@ -1,7 +1,5 @@
-import Link from "next/link";
-import { Plus, CreditCard, FilePlus2 } from "lucide-react";
 import { getDb } from "@/db/client";
-import { buttonClass, PageHeader, Stat } from "@/components/ui";
+import { PageHeader, Stat } from "@/components/ui";
 import { currentMonth, monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { monthBilling } from "@/services/reports";
@@ -23,8 +21,6 @@ export default async function Dashboard() {
         actions={
           <>
             <AddTenantButton active={active} variant="secondary" />
-            <Link href="/admin/payments/new" className={buttonClass("secondary")}><CreditCard className="size-4" aria-hidden /> Record payment</Link>
-            <Link href="/admin/invoices" className={buttonClass()}><FilePlus2 className="size-4" aria-hidden /> Generate bills</Link>
           </>
         }
       />

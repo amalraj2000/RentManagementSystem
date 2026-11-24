@@ -14,7 +14,7 @@ import { requireAdmin } from "@/lib/session";
 import { paymentActivity } from "@/services/payment-activity";
 import { paymentBoard, paymentsByTenant, unpaidItemsByTenant } from "@/services/reports";
 
-export const metadata = { title: "Payments" };
+export const metadata = { title: "Rent" };
 
 /** One month: every active tenant, whether they have paid, and the actions to mark paid / take back / approve a reported payment. */
 export default async function PaymentsMonth({ params }: { params: Promise<{ month: string }> }) {
@@ -28,7 +28,7 @@ export default async function PaymentsMonth({ params }: { params: Promise<{ mont
   const waiting = all.filter((r) => r.status === "waiting" && r.month === month);
   return (
     <>
-      <BackLink href="/admin/payments" label="Payments" />
+      <BackLink href="/admin/payments" label="Rent" />
       <PageHeader title={monthLabel(month)} description="Active tenants and whether their rent is paid for this month." />
       {tenants.length === 0 ? <Empty>No active tenants yet.</Empty> : (
         <Table>

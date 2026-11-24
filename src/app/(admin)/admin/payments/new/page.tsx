@@ -43,7 +43,7 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
     const preview = selected ? await previewDues(db, selected.id) : null;
     return (
       <>
-        <BackLink href="/admin/payments" label="Payments" />
+        <BackLink href="/admin/payments" label="Rent" />
         <PageHeader title="Record payment" />
         <div className="mb-4 max-w-2xl">{toggle}</div>
         <Card className="max-w-2xl p-5">
@@ -98,7 +98,7 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
   const bills = open.map((o) => ({ id: o.id, label: `${o.name} — ${monthLabel(o.month)}`, balance: o.balance }));
   return (
     <div className="mx-auto max-w-xl">
-      <BackLink href="/admin/payments" label="Payments" />
+      <BackLink href="/admin/payments" label="Rent" />
       <PageHeader title="Record payment" />
       {bills.length === 0 ? <Card><Empty>Nothing is due right now. Generate bills first.</Empty></Card> : (
         <Card className="p-5">

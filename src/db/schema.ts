@@ -277,6 +277,44 @@ export const paymentClaims = sqliteTable(
   ],
 );
 
+/** A shared cost (e.g. a gas cylinder), split between the active tenants. Tracked on its own — never part of rent or invoices. */
+export const expenses = sqliteTable(
+  "expenses",
+  {
+    id: id(),
+    title: text("title").notNull(),
+    note: text("note"),
+    amountPaise: integer("amount_paise").notNull(),
+    expenseDate: text("expense_date").notNull(),
+    createdBy: text("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [index("expenses_date_idx").on(t.expenseDate), check("expense_amount_positive", sql`${t.amountPaise} > 0`)],
+);
+
+/** Each tenant's share of an expense (a snapshot taken when the expense is added) and whether they have paid it. */
+export const expenseShares = sqliteTable(
+  "expense_shares",
+  {
+    id: id(),
+    expenseId: text("expense_id").notNull().references(() => expenses.id, { onDelete: "cascade" }),
+    tenantId: text("tenant_id").notNull().references(() => tenantProfiles.id, { onDelete: "restrict" }),
+    amountPaise: integer("amount_paise").notNull(),
+    /** due = not paid · waiting = the tenant says they paid, the owner has not confirmed · paid = confirmed / marked paid by the owner. */
+    status: text("status", { enum: ["due", "waiting", "paid"] }).notNull().default("due"),
+    method: text("method", { enum: ["cash", "upi"] }),
+    paidOn: text("paid_on"),
+    createdAt: createdAt(),
+    updatedAt: updatedAt(),
+  },
+  (t) => [
+    uniqueIndex("expense_share_uq").on(t.expenseId, t.tenantId),
+    index("expense_share_tenant_idx").on(t.tenantId),
+    check("expense_share_positive", sql`${t.amountPaise} > 0`),
+  ],
+);
+
 export const announcements = sqliteTable(
   "announcements",
   {

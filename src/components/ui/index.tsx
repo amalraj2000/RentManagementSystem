@@ -67,6 +67,7 @@ const tones: Record<string, string> = {
   partial: "bg-amber-50 text-amber-800 ring-amber-200",
   notice: "bg-amber-50 text-amber-800 ring-amber-200",
   unpaid: "bg-slate-100 text-slate-700 ring-slate-200",
+  due: "bg-amber-50 text-amber-800 ring-amber-200",
   overdue: "bg-red-50 text-red-700 ring-red-200",
   moved_out: "bg-slate-100 text-slate-600 ring-slate-200",
   cancelled: "bg-slate-100 text-slate-500 ring-slate-200",

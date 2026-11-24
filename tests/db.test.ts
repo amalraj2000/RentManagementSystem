@@ -914,3 +914,46 @@ describe("tenant details: date of birth and self-edit", () => {
     await expect(updateOwnProfile(d, adm, { name: "Admin", phone: "9999900001", dateOfBirth: null })).rejects.toThrow(/Tenant profile/); // only tenants have this
   });
 });
+
+describe("expenses (separate from rent)", () => {
+  it("splits equally between active tenants, tracks paid/due, confirms reports, and guards edits/deletes", async () => {
+    const { createExpense, updateExpense, deleteExpense, markSharePaid, revertSharePaid, reportSharePaid, expenseDetail, listExpenses } = await import("@/services/expenses");
+    const d = await testDb();
+    const adm = await seedAdmin(d);
+    const a = await addTenant(d, adm, { name: "Aa", joining: "2026-01-01" });
+    const b = await addTenant(d, adm, { name: "Bb", joining: "2026-01-01" });
+    const gone = await addTenant(d, adm, { name: "Gone", joining: "2026-01-01" });
+    await vacateTenant(d, adm, gone, "2026-02-01");
+    const id = await createExpense(d, adm, { title: "Gas cylinder", amountPaise: 100001, expenseDate: "2026-03-01" });
+    const det = (await expenseDetail(d, id))!;
+    expect(det.shares.map((s) => s.name).sort()).toEqual(["Aa", "Bb"]); // vacated tenant is not charged
+    expect(det.shares.reduce((x, s) => x + s.amountPaise, 0)).toBe(100001);
+    expect(det.shares.every((s) => s.status === "due")).toBe(true);
+    // no invoice side effects
+    expect(await d.select().from(invoices)).toHaveLength(0);
+
+    const [sa, sb] = [det.shares.find((s) => s.name === "Aa")!, det.shares.find((s) => s.name === "Bb")!];
+    await markSharePaid(d, adm, sa.id, "cash", "2026-03-02");
+    await expect(markSharePaid(d, adm, sa.id)).rejects.toThrow(/Already/);
+    // tenant reports, owner confirms
+    const [ub] = await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, b));
+    await reportSharePaid(d, ub.userId, sb.id, "upi");
+    await expect(reportSharePaid(d, ub.userId, sb.id, "upi")).rejects.toThrow(/already/i);
+    expect((await expenseDetail(d, id))!.shares.find((s) => s.id === sb.id)!.status).toBe("waiting");
+    // a tenant can't report someone else's share
+    const [ua] = await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, a));
+    await expect(reportSharePaid(d, ua.userId, sb.id, "upi")).rejects.toThrow();
+    await markSharePaid(d, adm, sb.id);
+    expect((await listExpenses(d))[0]).toMatchObject({ paid: 2, total: 2, waiting: 0 });
+
+    await expect(updateExpense(d, adm, id, { title: "Gas", amountPaise: 90000, expenseDate: "2026-03-01" })).rejects.toThrow(/already paid/);
+    await updateExpense(d, adm, id, { title: "Gas (renamed)", amountPaise: 100001, expenseDate: "2026-03-05" }); // title/date are fine
+    await expect(deleteExpense(d, adm, id)).rejects.toThrow(/can't be deleted/);
+    await revertSharePaid(d, adm, sa.id);
+    await revertSharePaid(d, adm, sb.id);
+    await updateExpense(d, adm, id, { title: "Gas", amountPaise: 90000, expenseDate: "2026-03-05" });
+    expect((await expenseDetail(d, id))!.shares.reduce((x, s) => x + s.amountPaise, 0)).toBe(90000);
+    await deleteExpense(d, adm, id);
+    expect(await listExpenses(d)).toHaveLength(0);
+  });
+});
