@@ -23,8 +23,7 @@ export async function login(formData: FormData) {
     const r = await authenticate(db, parsed.data.email, parsed.data.password, await clientIp());
     if (!r.ok) {
       // Recorded against the account (when it exists) so admins can see attempts in that user's logs.
-      if (r.userId) await audit(db, r.userId, r.reason === "locked" ? "auth.login_blocked" : "auth.login_failed", "user", r.userId, { ip: await clientIp() });
-      if (r.reason === "locked") throw new AppError(`Too many attempts. Try again in ${Math.ceil((r.retryAfterMs ?? 0) / 60000)} minute(s).`);
+      if (r.userId) await audit(db, r.userId, "auth.login_failed", "user", r.userId, { ip: await clientIp() });
       throw new AppError("Incorrect email or password", "password");
     }
     await startSession(r.userId);

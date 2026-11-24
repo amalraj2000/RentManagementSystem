@@ -4,12 +4,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getDb } from "@/db/client";
 import { run, fd } from "@/lib/action";
-import { EXPENSE_CATEGORIES } from "@/lib/categories";
 import { formatINR } from "@/lib/money";
 import { requireAdmin } from "@/lib/session";
 import * as S from "@/lib/schemas";
 import { addInvoiceItem, deleteInvoice, markPaid, recordPayment, syncInvoices, updatePaymentDetails, voidPayment } from "@/services/billing";
-import { addExpense, deleteAnnouncement, deleteExpense, postAnnouncement, updateAnnouncement, updateExpense, updateSettings } from "@/services/misc";
+import { deleteAnnouncement, postAnnouncement, updateAnnouncement, updateSettings } from "@/services/misc";
 import { arrangeRoomBeds, createTenant, deleteTenant, revertVacate, vacateTenant, moveTenantToBed, resetTenantPassword, setTenantLoginActive, updateTenant } from "@/services/tenants";
 import { createAdminUser, deleteAdminUser, resetAdminPassword, setAdminActive, updateAdminUser } from "@/services/admins";
 import { createRoom, deleteRoom, updateRoom } from "@/services/rooms";
@@ -25,7 +24,6 @@ import { ROOM_ADD_DELETE_ENABLED } from "@/lib/features";
 import { deleteDocument, uploadDocument, validateFile } from "@/services/documents";
 import { AppError } from "@/services/common";
 import { todayISO } from "@/lib/dates";
-import { createUtilityBill, deleteUtilityBill, updateUtilityDetails } from "@/services/utilities";
 
 const tenantFields = {
   name: S.text(100).min(2, "Enter the tenant's name"),
@@ -98,9 +96,24 @@ export async function deleteDocumentAction(id: string) {
 export async function updateTenantAction(tenantId: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
-    const d = z.object({ ...tenantFields, status: z.enum(["active", "notice", "moved_out"]) }).parse(fd(f));
-    await updateTenant(getDb(), me.id, S.id.parse(tenantId), { ...toInput(d), status: d.status });
+    const d = z
+      .object({ ...tenantFields, status: z.enum(["active", "notice", "moved_out"]), moveOutDate: z.string().optional(), bedId: z.string().optional(), password: z.string().max(128).optional(), idType: z.string().optional() })
+      .parse(fd(f));
+    const photoFile = fileOf(f, "photo");
+    const idFile = fileOf(f, "idProof");
+    const photo = photoFile ? await validateFile(photoFile, "photo", "photo") : null;
+    const idProof = idFile ? { file: await validateFile(idFile, "id_proof", "idProof"), idType: d.idType } : null;
+    await updateTenant(getDb(), me.id, S.id.parse(tenantId), {
+      ...toInput(d),
+      status: d.status,
+      moveOutDate: d.status === "moved_out" ? d.moveOutDate || null : null,
+      bedId: d.status === "moved_out" || d.bedId === undefined ? undefined : d.bedId,
+      password: d.password || null,
+      photo,
+      idProof,
+    });
     revalidatePath("/admin", "layout");
+    revalidatePath("/portal", "layout");
     return "Tenant updated";
   });
 }
@@ -191,7 +204,6 @@ export async function recordPaymentAction(f: FormData) {
     const d = z
       .object({
         invoiceId: S.id,
-        purpose: z.enum(["rent", "expense"]).default("rent"),
         amount: S.positiveMoney,
         paidOn: S.date,
         method: z.enum(["cash", "upi", "bank_transfer", "other"]),
@@ -199,25 +211,25 @@ export async function recordPaymentAction(f: FormData) {
         note: S.optText(200),
       })
       .parse(fd(f));
-    const r = await recordPayment(getDb(), me.id, { invoiceId: d.invoiceId, purpose: d.purpose, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
+    const r = await recordPayment(getDb(), me.id, { invoiceId: d.invoiceId, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
     revalidatePath("/admin", "layout");
     return `Payment recorded · receipt ${r.receiptNo}`;
   });
 }
 
-/** "This has been paid": records the whole remaining rent (`target` = "rent") or ONE expense line (`target` = its id) as paid today. */
-export async function markPaidAction(invoiceId: string, target: string, f: FormData) {
+/** "This has been paid": records the whole remaining balance of the bill as paid today. */
+export async function markPaidAction(invoiceId: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
     const d = z.object({ method: z.enum(["upi", "cash"]) }).parse(fd(f));
-    const r = await markPaid(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), itemId: target === "rent" ? null : S.id.parse(target), method: d.method });
+    const r = await markPaid(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), method: d.method });
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return `Marked as paid · receipt ${r.receiptNo}`;
   });
 }
 
-/** Marks several things as paid in one go. Each pick is "rent|<invoiceId>" or "line|<invoiceId>|<itemId>"; each is paid in full, on its own. */
+/** Marks several things as paid in one go. Each pick is an invoice id; each is paid in full, on its own. */
 export async function markPaidManyAction(f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
@@ -226,9 +238,7 @@ export async function markPaidManyAction(f: FormData) {
     if (!picks.length) throw new AppError("Tick what has been paid");
     let n = 0;
     for (const pick of picks) {
-      const [type, invoiceId, itemId] = pick.split("|");
-      if (type !== "rent" && type !== "line") throw new AppError("Something in the list is not valid");
-      await markPaid(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), itemId: type === "line" ? S.id.parse(itemId) : null, method: d.method });
+      await markPaid(getDb(), me.id, { invoiceId: S.id.parse(pick), method: d.method });
       n++;
     }
     revalidatePath("/admin", "layout");
@@ -271,85 +281,6 @@ export async function addInvoiceItemAction(f: FormData) {
   });
 }
 
-export async function createUtilityAction(type: "electricity" | "water", f: FormData) {
-  return run(async () => {
-    const me = await requireAdmin();
-    const raw = fd(f);
-    const d = z
-      .object({
-        periodMonth: S.month,
-        total: S.positiveMoney,
-        method: z.enum(["equal_residents", "equal_beds", "custom"]),
-        billDate: S.date,
-        dueDate: S.date,
-        openingReading: S.optInt,
-        closingReading: S.optInt,
-        attachmentRef: S.optText(300),
-        notes: S.optText(300),
-      })
-      .parse(raw);
-    const custom: Record<string, number> = {};
-    for (const [k, v] of Object.entries(raw)) {
-      if (k.startsWith("custom_") && String(v).trim()) custom[k.slice(7)] = S.money.parse(String(v));
-    }
-    await createUtilityBill(getDb(), me.id, {
-      type,
-      periodMonth: d.periodMonth,
-      totalPaise: d.total,
-      method: d.method,
-      billDate: d.billDate,
-      dueDate: d.dueDate,
-      openingReading: d.openingReading,
-      closingReading: d.closingReading,
-      attachmentRef: d.attachmentRef,
-      notes: d.notes,
-      custom,
-    });
-    revalidatePath("/admin", "layout");
-    return `${type === "electricity" ? "Electricity" : "Water"} bill saved and added to invoices`;
-  });
-}
-
-export async function deleteUtilityAction(id: string) {
-  return run(async () => {
-    const me = await requireAdmin();
-    await deleteUtilityBill(getDb(), me.id, S.id.parse(id));
-    revalidatePath("/admin", "layout");
-    return "Bill deleted";
-  });
-}
-
-const expenseShape = z.object({
-  category: z.enum(EXPENSE_CATEGORIES),
-  amount: S.positiveMoney,
-  spentOn: S.date,
-  description: S.text(200),
-  receiptRef: S.optText(300),
-  shareMode: z.enum(["none", "equal", "custom"]).default("equal"), // default: split among the active tenants
-});
-
-export async function addExpenseAction(f: FormData) {
-  return run(async () => {
-    const me = await requireAdmin();
-    const img = fileOf(f, "receipt");
-    const receipt = img ? await validateFile(img, "photo", "receipt") : null;
-    const d = expenseShape.parse(fd(f));
-    await addExpense(getDb(), me.id, { category: d.category, amountPaise: d.amount, spentOn: d.spentOn, description: d.description, receiptRef: d.receiptRef, receipt, share: shareFrom(fd(f), d.shareMode) });
-    revalidatePath("/admin", "layout");
-    revalidatePath("/portal", "layout");
-    return d.shareMode === "none" ? "Expense recorded" : "Expense recorded and shared with tenants";
-  });
-}
-
-export async function deleteExpenseAction(id: string) {
-  return run(async () => {
-    const me = await requireAdmin();
-    await deleteExpense(getDb(), me.id, S.id.parse(id));
-    revalidatePath("/admin", "layout");
-    return "Expense deleted";
-  });
-}
-
 export async function postAnnouncementAction(f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
@@ -378,15 +309,13 @@ export async function updateSettingsAction(f: FormData) {
       .object({
         defaultRent: S.nonNegMoney,
         dueDay: z.coerce.number().int().min(1).max(28),
-        electricityMethod: z.enum(["equal_residents", "equal_beds", "custom"]),
-        waterMethod: z.enum(["equal_residents", "custom"]),
         houseRules: S.text(4000),
         contactInfo: S.text(2000),
         upiId: S.upiId,
         upiPayeeName: S.text(60),
       })
       .parse(fd(f));
-    await updateSettings(getDb(), me.id, { defaultRentPaise: d.defaultRent, dueDayOfMonth: d.dueDay, electricityMethod: d.electricityMethod, waterMethod: d.waterMethod, houseRules: d.houseRules, contactInfo: d.contactInfo, upiId: d.upiId, upiPayeeName: d.upiPayeeName });
+    await updateSettings(getDb(), me.id, { defaultRentPaise: d.defaultRent, dueDayOfMonth: d.dueDay, houseRules: d.houseRules, contactInfo: d.contactInfo, upiId: d.upiId, upiPayeeName: d.upiPayeeName });
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return "Settings saved";
@@ -440,30 +369,6 @@ export async function deleteAdminAction(id: string) {
   });
 }
 
-/** Reads the per-tenant amounts from share_<tenantId> inputs. */
-function shareFrom(raw: Record<string, FormDataEntryValue>, mode: "none" | "equal" | "custom") {
-  const custom: Record<string, number> = {};
-  if (mode === "custom") {
-    for (const [k, v] of Object.entries(raw)) {
-      if (k.startsWith("share_") && String(v).trim()) custom[k.slice(6)] = S.money.parse(String(v));
-    }
-  }
-  return { mode, custom };
-}
-
-export async function updateExpenseAction(id: string, f: FormData) {
-  return run(async () => {
-    const me = await requireAdmin();
-    const d = expenseShape.parse(fd(f));
-    const img = fileOf(f, "receipt");
-    const receipt = img ? await validateFile(img, "photo", "receipt") : null;
-    await updateExpense(getDb(), me.id, S.id.parse(id), { category: d.category, amountPaise: d.amount, spentOn: d.spentOn, description: d.description, receiptRef: d.receiptRef, receipt, removeReceipt: f.get("removeReceipt") === "on", share: shareFrom(fd(f), d.shareMode) });
-    revalidatePath("/admin", "layout");
-    revalidatePath("/portal", "layout");
-    return "Expense updated";
-  });
-}
-
 export async function updateAnnouncementAction(id: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
@@ -482,16 +387,6 @@ export async function updatePaymentAction(id: string, f: FormData) {
     await updatePaymentDetails(getDb(), me.id, S.id.parse(id), d);
     revalidatePath("/admin", "layout");
     return "Payment updated";
-  });
-}
-
-export async function updateUtilityAction(id: string, f: FormData) {
-  return run(async () => {
-    const me = await requireAdmin();
-    const d = z.object({ billDate: S.date, dueDate: S.date, openingReading: S.optInt, closingReading: S.optInt, attachmentRef: S.optText(300), notes: S.optText(300) }).parse(fd(f));
-    await updateUtilityDetails(getDb(), me.id, S.id.parse(id), d);
-    revalidatePath("/admin", "layout");
-    return "Bill updated";
   });
 }
 
@@ -659,9 +554,9 @@ export async function collectDuesAction(tenantId: string, f: FormData) {
   return run(async () => {
     const me = await requireAdmin();
     const d = z
-      .object({ purpose: z.enum(["rent", "expense"]).default("rent"), amount: z.string().optional().transform((v, ctx) => { if (!v?.trim()) return null; try { return S.money.parse(v); } catch { ctx.addIssue({ code: "custom", message: "Enter a valid amount, like 1500 or 1500.50" }); return z.NEVER; } }), paidOn: S.date, method: z.enum(["cash", "upi", "bank_transfer", "other"]), reference: S.optText(100), note: S.optText(200) })
+      .object({ amount: z.string().optional().transform((v, ctx) => { if (!v?.trim()) return null; try { return S.money.parse(v); } catch { ctx.addIssue({ code: "custom", message: "Enter a valid amount, like 1500 or 1500.50" }); return z.NEVER; } }), paidOn: S.date, method: z.enum(["cash", "upi", "bank_transfer", "other"]), reference: S.optText(100), note: S.optText(200) })
       .parse(fd(f));
-    const r = await collectDues(getDb(), me.id, { tenantId: S.id.parse(tenantId), purpose: d.purpose, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
+    const r = await collectDues(getDb(), me.id, { tenantId: S.id.parse(tenantId), amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note });
     revalidatePath("/admin", "layout");
     revalidatePath("/portal", "layout");
     return `Collected ${formatINR(r.collected)} across ${r.payments.length} month${r.payments.length > 1 ? "s" : ""}${r.remaining > 0 ? ` · ${formatINR(r.remaining)} still due` : " · all clear"}`;

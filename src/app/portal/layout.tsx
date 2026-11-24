@@ -1,4 +1,4 @@
-import { Bell, CalendarDays, CreditCard, Home, Receipt } from "lucide-react";
+import { Bell, CalendarDays, CreditCard, Home } from "lucide-react";
 import { AppShell } from "@/components/nav";
 import { Eye } from "lucide-react";
 import { UserMenu } from "@/components/user-menu";
@@ -14,7 +14,6 @@ import { scheduleDailyReminders } from "@/lib/reminders";
 const items = [
   { href: "/portal", label: "Home", icon: <Home /> },
   { href: "/portal/rent", label: "Rent", icon: <CalendarDays /> },
-  { href: "/portal/expenses", label: "Expenses", icon: <Receipt /> },
   { href: "/portal/payments", label: "Payments", icon: <CreditCard /> },
   { href: "/portal/notices", label: "Notices", icon: <Bell /> },
 ];

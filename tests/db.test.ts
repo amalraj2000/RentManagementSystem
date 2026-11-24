@@ -1,14 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { and, eq, isNull } from "drizzle-orm";
 import type { DB } from "@/db/client";
-import { auditLogs, bedAssignments, expenses, invoiceItems, invoices, payments, tenantProfiles, users, utilityAllocations } from "@/db/schema";
-import { authenticate, createSession, getSessionUser, destroySession, MAX_FAILURES } from "@/lib/auth-core";
+import { auditLogs, bedAssignments, invoiceItems, invoices, payments, tenantProfiles, users } from "@/db/schema";
+import { authenticate, createSession, getSessionUser, destroySession } from "@/lib/auth-core";
 import { addInvoiceItem, getInvoiceDetail, recordPayment, syncInvoices, voidPayment } from "@/services/billing";
-import { createUtilityBill, deleteUtilityBill } from "@/services/utilities";
 import { createTenant, deleteTenant, listRoomsWithBeds, vacateTenant, moveTenantToBed } from "@/services/tenants";
 import { monthlySummary, outstandingByTenant, dashboardData } from "@/services/reports";
-import { addExpense } from "@/services/misc";
-import { myInvoices, myPayments, mySharedExpenses, tenantForUser } from "@/services/portal";
+import { myInvoices, myPayments, tenantForUser } from "@/services/portal";
 import { addTenant, allBeds, seedAdmin, testDb } from "./helpers";
 
 let db: DB;
@@ -34,14 +32,13 @@ describe("foreign keys & transactions", () => {
 });
 
 describe("authentication & sessions", () => {
-  it("logs in, rejects wrong password, locks out after repeated failures", async () => {
+  it("logs in, rejects wrong password, never locks out", async () => {
     expect((await authenticate(db, "OWNER@example.test", "Sup3rSecret99", "1.1.1.1")).ok).toBe(true);
     const bad = await authenticate(db, "owner@example.test", "wrong-password1", "2.2.2.2");
     expect(bad).toMatchObject({ ok: false, reason: "invalid" });
-    for (let i = 0; i < MAX_FAILURES; i++) await authenticate(db, "owner@example.test", "wrong-password1", "3.3.3.3");
-    const locked = await authenticate(db, "owner@example.test", "Sup3rSecret99", "3.3.3.3");
-    expect(locked).toMatchObject({ ok: false, reason: "locked" });
-    // Other IPs unaffected; unknown users get the same generic failure.
+    for (let i = 0; i < 10; i++) await authenticate(db, "owner@example.test", "wrong-password1", "3.3.3.3");
+    expect((await authenticate(db, "owner@example.test", "Sup3rSecret99", "3.3.3.3")).ok).toBe(true); // no lockout
+    // Unknown users get the same generic failure.
     expect((await authenticate(db, "ghost@example.test", "whatever12345", "4.4.4.4"))).toMatchObject({ ok: false, reason: "invalid" });
   });
   it("sessions expire, can be destroyed, and store only a hash", async () => {
@@ -168,73 +165,6 @@ describe("rent invoices & payments", () => {
   });
 });
 
-describe("utility billing", () => {
-  let tenants: string[];
-  const M = "2026-05";
-  beforeAll(async () => {
-    db = await testDb();
-    admin = await seedAdmin(db);
-    const beds = await allBeds(db);
-    tenants = [];
-    for (let i = 0; i < 3; i++) tenants.push(await addTenant(db, admin, { bedId: beds[i].id, name: `Res ${i}` }));
-    await addTenant(db, admin, { joining: "2026-06-15" }); // joins after May: not eligible
-  });
-
-  it("splits electricity exactly, snapshots allocations, attaches to invoices, mirrors expense", async () => {
-    const id = await createUtilityBill(db, admin, {
-      type: "electricity", periodMonth: M, totalPaise: 1000001, method: "equal_residents",
-      billDate: "2026-05-31", dueDate: "2026-06-10", openingReading: 1000, closingReading: 1450,
-    });
-    const allocs = await db.select().from(utilityAllocations).where(eq(utilityAllocations.utilityBillId, id));
-    expect(allocs).toHaveLength(3);
-    expect(allocs.reduce((a, x) => a + x.amountPaise, 0)).toBe(1000001);
-    const exp = await db.select().from(expenses).where(eq(expenses.utilityBillId, id));
-    expect(exp[0].amountPaise).toBe(1000001);
-    const invs = await db.select().from(invoices).where(eq(invoices.periodMonth, M));
-    expect(invs).toHaveLength(3);
-    for (const i of invs) expect(i.totalPaise).toBe(600000 + allocs.find((a) => a.tenantId === i.tenantId)!.amountPaise);
-  });
-
-  it("prevents duplicate bill for same type and period; allows water separately", async () => {
-    await expect(
-      createUtilityBill(db, admin, { type: "electricity", periodMonth: M, totalPaise: 5000, method: "equal_residents", billDate: "2026-05-31", dueDate: "2026-06-10" }),
-    ).rejects.toThrow(/already exists/);
-    await createUtilityBill(db, admin, { type: "water", periodMonth: M, totalPaise: 90000, method: "equal_residents", billDate: "2026-05-31", dueDate: "2026-06-10" });
-    const kinds = (await db.select().from(invoiceItems)).map((i) => i.kind);
-    expect(kinds.filter((k) => k === "water")).toHaveLength(3);
-    expect(kinds.filter((k) => k === "electricity")).toHaveLength(3);
-  });
-
-  it("rejects bad readings and mismatched custom amounts", async () => {
-    await expect(
-      createUtilityBill(db, admin, { type: "electricity", periodMonth: "2026-07", totalPaise: 1000, method: "equal_residents", billDate: "2026-07-31", dueDate: "2026-08-10", openingReading: 500, closingReading: 400 }),
-    ).rejects.toThrow(/Closing/);
-    await expect(
-      createUtilityBill(db, admin, { type: "electricity", periodMonth: "2026-07", totalPaise: 1000, method: "custom", billDate: "2026-07-31", dueDate: "2026-08-10", custom: { [tenants[0]]: 100 } }),
-    ).rejects.toThrow(/add up/);
-  });
-
-  it("historical allocations don't change when residents change later", async () => {
-    const before = await db.select().from(utilityAllocations);
-    await addTenant(db, admin, { joining: "2026-05-01" }); // new resident after bill creation
-    await vacateTenant(db, admin, tenants[0], "2026-08-01");
-    const after = await db.select().from(utilityAllocations);
-    expect(after.map((a) => [a.tenantId, a.amountPaise]).sort()).toEqual(before.map((a) => [a.tenantId, a.amountPaise]).sort());
-  });
-
-  it("custom allocation works and delete is blocked when payments exist", async () => {
-    const id = await createUtilityBill(db, admin, {
-      type: "water", periodMonth: "2026-09", totalPaise: 30000, method: "custom", billDate: "2026-09-30", dueDate: "2026-10-10",
-      custom: { [tenants[1]]: 10000, [tenants[2]]: 20000 },
-    });
-    const [inv] = await db.select().from(invoices).where(and(eq(invoices.tenantId, tenants[1]), eq(invoices.periodMonth, "2026-09")));
-    expect(inv.totalPaise).toBe(600000 + 10000);
-    await recordPayment(db, admin, { invoiceId: inv.id, amountPaise: 1000, paidOn: "2026-09-02", method: "cash" }); // a RENT payment
-    await recordPayment(db, admin, { invoiceId: inv.id, purpose: "expense", amountPaise: 1000, paidOn: "2026-09-02", method: "cash" });
-    await expect(deleteUtilityBill(db, admin, id)).rejects.toThrow(/Expense payments exist/);
-  });
-});
-
 describe("vacate, isolation and reports", () => {
   let a: string, b: string, aUser: string, bUser: string;
   beforeAll(async () => {
@@ -281,15 +211,11 @@ describe("vacate, isolation and reports", () => {
     expect(await db.select().from(tenantProfiles).where(eq(tenantProfiles.id, x))).toHaveLength(0);
   });
 
-  it("reports separate cash collected from invoiced and subtract expenses", async () => {
-    await addExpense(db, admin, { category: "water", amountPaise: 150000, spentOn: "2026-03-12", description: "Maid" });
+  it("reports separate cash collected from invoiced", async () => {
     const rows = await monthlySummary(db, "2026-03", "2026-04");
     const mar = rows[0];
     expect(mar.invoiced).toBe(1200000); // billed, not income
-    expect(mar.collected.total).toBe(400000); // only cash
-    expect(mar.collected.rent).toBe(400000);
-    expect(mar.expenses).toBe(150000);
-    expect(mar.net).toBe(250000);
+    expect(mar.collected).toBe(400000); // only cash
     expect(mar.outstanding).toBe(800000);
     const dash = await dashboardData(db, "2026-03", "2026-03-15");
     expect(dash.rentCollected).toBe(400000);
@@ -303,7 +229,7 @@ describe("vacate, isolation and reports", () => {
     const [p] = await db.select().from(payments).where(eq(payments.tenantId, a));
     await voidPayment(db, admin, p.id, "bounced");
     const rows = await monthlySummary(db, "2026-03", "2026-03");
-    expect(rows[0].collected.total).toBe(0);
+    expect(rows[0].collected).toBe(0);
   });
 });
 
@@ -334,18 +260,12 @@ describe("admin management", () => {
 });
 
 describe("edit & delete rules", () => {
-  it("edits expenses/notices/payments/utility meta and guards deletes", async () => {
+  it("edits notices/payments and guards deletes", async () => {
     const d = await testDb();
     const adm = await seedAdmin(d);
-    const { addExpense, updateExpense, postAnnouncement, updateAnnouncement, listAnnouncements } = await import("@/services/misc");
+    const { postAnnouncement, updateAnnouncement, listAnnouncements } = await import("@/services/misc");
     const { updatePaymentDetails, deleteInvoice } = await import("@/services/billing");
-    const { updateUtilityDetails } = await import("@/services/utilities");
     const { updateAdminUser, deleteAdminUser, createAdminUser, listAdmins } = await import("@/services/admins");
-
-    await addExpense(d, adm, { category: "water", amountPaise: 1000, spentOn: "2026-03-01", description: "Maid" });
-    const [ex] = await d.select().from(expenses);
-    await updateExpense(d, adm, ex.id, { category: "electricity", amountPaise: 2500, spentOn: "2026-03-02", description: "Tap" });
-    expect((await d.select().from(expenses).where(eq(expenses.id, ex.id)))[0]).toMatchObject({ category: "electricity", amountPaise: 2500 });
 
     await postAnnouncement(d, adm, { title: "A", body: "B", pinned: false });
     const [an] = await listAnnouncements(d);
@@ -355,15 +275,7 @@ describe("edit & delete rules", () => {
     const beds = await allBeds(d);
     const t1 = await addTenant(d, adm, { bedId: beds[0].id });
     const t2 = await addTenant(d, adm, { bedId: beds[1].id });
-    await createUtilityBill(d, adm, { type: "electricity", periodMonth: "2026-03", totalPaise: 100000, method: "equal_residents", billDate: "2026-03-31", dueDate: "2026-04-10" });
-    const [bill] = await d.select().from((await import("@/db/schema")).utilityBills);
-    await expect(updateUtilityDetails(d, adm, bill.id, { billDate: "2026-03-30", dueDate: "2026-04-12", openingReading: 500, closingReading: 100 })).rejects.toThrow(/Closing/);
-    await updateUtilityDetails(d, adm, bill.id, { billDate: "2026-03-30", dueDate: "2026-04-12", openingReading: 100, closingReading: 400, notes: "ok" });
-    const after = (await d.select().from((await import("@/db/schema")).utilityBills))[0];
-    expect(after).toMatchObject({ unitsConsumed: 300, totalPaise: 100000 }); // total untouched
-    expect((await d.select().from(expenses).where(eq(expenses.utilityBillId, bill.id)))[0].spentOn).toBe("2026-03-30");
-    await expect(updateExpense(d, adm, (await d.select().from(expenses).where(eq(expenses.utilityBillId, bill.id)))[0].id, { category: "cooking_gas", amountPaise: 1, spentOn: "2026-03-01", description: "x" })).rejects.toThrow(/utility bill/);
-
+    await syncInvoices(d, adm, "2026-03");
     const [inv1] = await d.select().from(invoices).where(eq(invoices.tenantId, t1));
     const [inv2] = await d.select().from(invoices).where(eq(invoices.tenantId, t2));
     const pay = await recordPayment(d, adm, { invoiceId: inv1.id, amountPaise: 1000, paidOn: "2026-03-05", method: "cash" });
@@ -374,9 +286,9 @@ describe("edit & delete rules", () => {
     await deleteInvoice(d, adm, inv2.id); // no payments -> allowed
     expect(await d.select().from(invoices).where(eq(invoices.id, inv2.id))).toHaveLength(0);
     expect(await d.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv2.id))).toHaveLength(0);
-    await syncInvoices(d, adm, "2026-03"); // regenerates cleanly, utility share re-attached
+    await syncInvoices(d, adm, "2026-03"); // regenerates cleanly
     const [re] = await d.select().from(invoices).where(eq(invoices.tenantId, t2));
-    expect(re.totalPaise).toBe(600000 + 50000);
+    expect(re.totalPaise).toBe(600000);
 
     await createAdminUser(d, adm, { name: "Two", email: "two@example.test", password: "TwoPassword123" });
     const two = (await listAdmins(d)).find((a) => a.email === "two@example.test")!;
@@ -496,105 +408,6 @@ describe("tenant documents", () => {
   });
 });
 
-describe("expense receipt image", () => {
-  it("is optional, replaceable, removable, validated, and removed with the expense", async () => {
-    const { addExpense, updateExpense, deleteExpense, getReceiptImage, receiptInfo } = await import("@/services/misc");
-    const { validateFile } = await import("@/services/documents");
-    const { expenseReceipts } = await import("@/db/schema");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const png = (n: number) => new File([Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(n, 7)])], `r${n}.png`, { type: "image/png" });
-    const base = { category: "electricity" as const, amountPaise: 5000, spentOn: "2026-03-01", description: "Tap" };
-
-    const plain = await addExpense(d, adm, base); // no image: fine
-    expect(await getReceiptImage(d, plain)).toBeNull();
-
-    await expect(validateFile(new File(["%PDF-1.4 x"], "r.pdf"), "photo", "receipt")).rejects.toMatchObject({ field: "receipt" }); // images only
-    const withImg = await addExpense(d, adm, { ...base, receipt: await validateFile(png(50), "photo", "receipt") });
-    expect((await receiptInfo(d, withImg))?.fileName).toBe("r50.png");
-
-    const exp = (await d.select().from((await import("@/db/schema")).expenses).where(eq((await import("@/db/schema")).expenses.id, withImg)))[0];
-    await updateExpense(d, adm, withImg, { category: exp.category, amountPaise: 6000, spentOn: exp.spentOn, description: exp.description, receipt: await validateFile(png(80), "photo", "receipt") });
-    expect((await receiptInfo(d, withImg))?.fileName).toBe("r80.png"); // replaced, still one row
-    expect(await d.select().from(expenseReceipts)).toHaveLength(1);
-    await updateExpense(d, adm, withImg, { category: exp.category, amountPaise: 6000, spentOn: exp.spentOn, description: exp.description }); // untouched
-    expect(await receiptInfo(d, withImg)).not.toBeNull();
-    await updateExpense(d, adm, withImg, { category: exp.category, amountPaise: 6000, spentOn: exp.spentOn, description: exp.description, removeReceipt: true });
-    expect(await receiptInfo(d, withImg)).toBeNull();
-
-    const again = await addExpense(d, adm, { ...base, receipt: await validateFile(png(10), "photo", "receipt") });
-    await deleteExpense(d, adm, again);
-    expect(await d.select().from(expenseReceipts)).toHaveLength(0); // cascade, no orphan bytes
-  });
-});
-
-describe("shared expenses", () => {
-  it("splits equally / custom among active tenants, bills them, and guards edits", async () => {
-    const { addExpense, updateExpense, deleteExpense } = await import("@/services/misc");
-    const { expenseAllocations } = await import("@/db/schema");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const beds = await allBeds(d);
-    const t = [] as string[];
-    for (let i = 0; i < 3; i++) t.push(await addTenant(d, adm, { bedId: beds[i].id, name: `Sh ${i}`, rent: 100000 }));
-    const late = await addTenant(d, adm, { joining: "2026-09-01", name: "Late joiner" }); // not active in March
-    const left = await addTenant(d, adm, { joining: "2026-01-01", name: "Left early" });
-    await vacateTenant(d, adm, left, "2026-02-10"); // vacated before March
-    const base = { category: "water" as const, spentOn: "2026-03-10", description: "Deep clean" };
-
-    // EQUAL: 1000.01 over 3 active tenants -> exact, remainder paise distributed
-    const id = await addExpense(d, adm, { ...base, amountPaise: 100001, share: { mode: "equal" } });
-    const al = await d.select().from(expenseAllocations).where(eq(expenseAllocations.expenseId, id));
-    expect(al).toHaveLength(3);
-    expect(al.reduce((a, x) => a + x.amountPaise, 0)).toBe(100001);
-    expect(al.some((a) => a.tenantId === late || a.tenantId === left)).toBe(false);
-    const invs = await d.select().from(invoices).where(eq(invoices.periodMonth, "2026-03"));
-    for (const t1 of t) {
-      const inv = invs.find((i) => i.tenantId === t1)!;
-      const share = al.find((a) => a.tenantId === t1)!.amountPaise;
-      expect(inv.totalPaise).toBe(100000 + share);
-      const item = (await d.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id))).find((i) => i.expenseId === id)!;
-      expect(item).toMatchObject({ kind: "other", amountPaise: share });
-    }
-    // dashboard/portal view for a tenant shows only their share
-    const userOf = async (tid: string) => (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, tid)))[0].userId;
-    const mine = await mySharedExpenses(d, await userOf(t[0]));
-    expect(mine).toHaveLength(1);
-    expect(mine[0].sharePaise).toBe(al.find((a) => a.tenantId === t[0])!.amountPaise);
-    expect(await mySharedExpenses(d, await userOf(late))).toHaveLength(0);
-
-    // re-running invoice generation never duplicates the shared charge
-    await syncInvoices(d, adm, "2026-03");
-    expect((await d.select().from(invoiceItems)).filter((i) => i.expenseId === id)).toHaveLength(3);
-
-    // CUSTOM: different amounts, may total less than the expense; more than the expense is rejected
-    const c = await addExpense(d, adm, { ...base, description: "Repairs each", category: "electricity", amountPaise: 90000, share: { mode: "custom", custom: { [t[0]]: 10000, [t[1]]: 25000 } } });
-    expect((await d.select().from(expenseAllocations).where(eq(expenseAllocations.expenseId, c))).map((a) => a.amountPaise).sort((a, b) => a - b)).toEqual([10000, 25000]);
-    await expect(addExpense(d, adm, { ...base, amountPaise: 1000, share: { mode: "custom", custom: { [t[0]]: 600, [t[1]]: 600 } } })).rejects.toThrow(/more than the expense/);
-    await expect(addExpense(d, adm, { ...base, amountPaise: 1000, share: { mode: "custom", custom: { [late]: 500 } } })).rejects.toThrow(/not living here/);
-    await expect(addExpense(d, adm, { ...base, amountPaise: 1000, share: { mode: "custom", custom: {} } })).rejects.toThrow(/at least one tenant/);
-    expect((await d.select().from(expenses).where(eq(expenses.amountPaise, 1000)))).toHaveLength(0); // failed adds roll back fully
-
-    // EDIT: change amount -> shares rebuilt, invoice totals follow, nothing double-counted
-    await updateExpense(d, adm, c, { category: "electricity", amountPaise: 90000, spentOn: "2026-03-10", description: "Repairs each", share: { mode: "custom", custom: { [t[0]]: 15000, [t[2]]: 5000 } } });
-    const inv0 = (await d.select().from(invoices).where(and(eq(invoices.tenantId, t[0]), eq(invoices.periodMonth, "2026-03"))))[0];
-    expect(inv0.totalPaise).toBe(100000 + al.find((a) => a.tenantId === t[0])!.amountPaise + 15000);
-    const inv1 = (await d.select().from(invoices).where(and(eq(invoices.tenantId, t[1]), eq(invoices.periodMonth, "2026-03"))))[0];
-    expect(inv1.totalPaise).toBe(100000 + al.find((a) => a.tenantId === t[1])!.amountPaise); // t1 removed from custom share
-
-    // payments block changing/deleting shares
-    await recordPayment(d, adm, { invoiceId: inv0.id, amountPaise: 1000, paidOn: "2026-03-10", method: "cash" }); // RENT paid: must not lock the shared expense
-    await updateExpense(d, adm, c, { category: "electricity", amountPaise: 90000, spentOn: "2026-03-10", description: "Repairs each", share: { mode: "custom", custom: { [t[0]]: 15000, [t[2]]: 5000 } } });
-    await recordPayment(d, adm, { invoiceId: inv0.id, purpose: "expense", amountPaise: 1000, paidOn: "2026-03-11", method: "cash" }); // EXPENSES paid: now it is locked
-    await expect(updateExpense(d, adm, c, { category: "electricity", amountPaise: 90000, spentOn: "2026-03-10", description: "Repairs each", share: { mode: "none" } })).rejects.toThrow(/Expense payments were already recorded/);
-    await expect(deleteExpense(d, adm, c)).rejects.toThrow(/Expense payments were already recorded/);
-    // unchanged edit with payments present is fine (no rebuild needed)
-    await updateExpense(d, adm, c, { category: "electricity", amountPaise: 90000, spentOn: "2026-03-10", description: "Repairs each", share: { mode: "custom", custom: { [t[0]]: 15000, [t[2]]: 5000 } } });
-    // not-yet-paid shared expense can be un-shared and deleted
-    await updateExpense(d, adm, id, { category: "water", amountPaise: 100001, spentOn: "2026-03-10", description: "Deep clean", share: { mode: "none" } }).catch(() => null);
-  });
-});
-
 describe("notifications", () => {
   it("notifies the right people for each event, never duplicates, and keeps users isolated", async () => {
     const { listNotifications, unreadCount, markRead, markAllRead, runReminders } = await import("@/services/notifications");
@@ -640,11 +453,6 @@ describe("notifications", () => {
     // void -> tenant told
     await voidPayment(d, adm, pay.id, "Entered twice");
     expect(await titles(ua)).toContain("A payment was reversed");
-
-    // late charge on an EXISTING invoice -> "new charge" (shared expense)
-    const { addExpense } = await import("@/services/misc");
-    await addExpense(d, adm, { category: "water", amountPaise: 20000, spentOn: "2026-03-20", description: "Hall", share: { mode: "equal" } });
-    expect(await titles(ub)).toContain("New charge on your bill");
 
     // notice + vacate
     await updateTenant(d, adm, a, { name: "Noti A", email: (await d.select().from(users).where(eq(users.id, ua)))[0].email, phone: "9000000000", joiningDate: "2026-01-01", monthlyRentPaise: 100000, securityDepositPaise: 0, status: "notice" });
@@ -707,7 +515,7 @@ describe("tenant payment reports (claims) and own photo", () => {
     expect((await d.select().from(invoices).where(eq(invoices.id, invA.id)))[0].paidPaise).toBe(0);
     expect(await d.select().from(payments)).toHaveLength(0);
     expect(await pendingClaimCount(d)).toBe(1);
-    expect((await monthlySummary(d, "2026-03", "2026-03"))[0].collected.total).toBe(0);
+    expect((await monthlySummary(d, "2026-03", "2026-03"))[0].collected).toBe(0);
     expect((await listNotifications(d, adm, 20, 0)).some((n) => n.type === "claim_submitted")).toBe(true);
 
     // can't double-claim past the balance while one is pending
@@ -728,7 +536,7 @@ describe("tenant payment reports (claims) and own photo", () => {
     expect((await d.select().from(invoices).where(eq(invoices.id, invA.id)))[0].paidPaise).toBe(60000);
     const [done] = await d.select().from(paymentClaims).where(eq(paymentClaims.id, id));
     expect(done).toMatchObject({ status: "approved", paymentId: pay.id });
-    expect((await monthlySummary(d, "2026-03", "2026-03"))[0].collected.total).toBe(60000);
+    expect((await monthlySummary(d, "2026-03", "2026-03"))[0].collected).toBe(60000);
     await expect(approveClaim(d, adm, id)).rejects.toThrow(/already reviewed/); // no double approval
     expect((await listNotifications(d, ua, 20, 0)).some((n) => n.type === "payment_received")).toBe(true);
 
@@ -813,10 +621,9 @@ describe("user logs", () => {
   });
 });
 
-describe("tenant rent ledger & shared expense list", () => {
-  it("shows every month since joining (billed or not) and the tenant's share status, privately", async () => {
-    const { myRentLedger, mySharedItems } = await import("@/services/portal");
-    const { addExpense } = await import("@/services/misc");
+describe("tenant rent ledger", () => {
+  it("shows every month since joining (billed or not), privately", async () => {
+    const { myRentLedger } = await import("@/services/portal");
     const d = await testDb();
     const adm = await seedAdmin(d);
     const beds = await allBeds(d);
@@ -832,7 +639,7 @@ describe("tenant rent ledger & shared expense list", () => {
     expect(ledger.months.map((m) => m.month)).toEqual(["2026-04", "2026-03", "2026-02", "2026-01"]); // Jan(joined)…Apr, newest first
     expect(ledger.months.find((m) => m.month === "2026-03")!.invoice).toBeNull(); // not billed yet but still listed
     expect(ledger.months.find((m) => m.month === "2026-01")!.invoice).toBeNull();
-    expect(ledger.months.find((m) => m.month === "2026-02")!.invoice).toMatchObject({ totalPaise: 100000, rentPaise: 100000 });
+    expect(ledger.months.find((m) => m.month === "2026-02")!.invoice).toMatchObject({ totalPaise: 100000, paidPaise: 0 });
     // B joined in Feb: no January row
     expect((await myRentLedger(d, ub, "2026-04"))!.months.map((m) => m.month)).toEqual(["2026-04", "2026-03", "2026-02"]);
     expect(await myRentLedger(d, "unknown-user", "2026-04")).toBeNull();
@@ -840,22 +647,6 @@ describe("tenant rent ledger & shared expense list", () => {
     // a vacated tenant's ledger stops at the month they left
     await vacateTenant(d, adm, b, "2026-03-20");
     expect((await myRentLedger(d, ub, "2026-06"))!.months.map((m) => m.month)).toEqual(["2026-04", "2026-03", "2026-02"]); // Apr invoice still shown (it exists), nothing after
-
-    // shared expense (April): each tenant sees only their own share line, with paid status from payments
-    await addExpense(d, adm, { category: "water", amountPaise: 20000, spentOn: "2026-04-10", description: "Terrace", share: { mode: "equal" } });
-    const itemsA = await mySharedItems(d, ua);
-    expect(itemsA).toHaveLength(1);
-    expect(itemsA[0]).toMatchObject({ description: "Water: Terrace", amountPaise: 20000, totalPaise: 20000, status: "unpaid", balance: 20000 }); // B vacated in March, so A is the only active tenant in April
-    const [invA] = (await d.select().from(invoices).where(and(eq(invoices.tenantId, a), eq(invoices.periodMonth, "2026-04"))));
-    await recordPayment(d, adm, { invoiceId: invA.id, amountPaise: 100000, paidOn: "2026-04-05", method: "cash" }); // exactly the RENT
-    expect((await mySharedItems(d, ua))[0]).toMatchObject({ status: "unpaid", covered: 0 }); // paying rent never settles an expense
-    await recordPayment(d, adm, { invoiceId: invA.id, purpose: "expense", amountPaise: 4000, paidOn: "2026-04-06", method: "cash" });
-    expect((await mySharedItems(d, ua))[0]).toMatchObject({ status: "partial", covered: 4000, balance: 16000 });
-    await recordPayment(d, adm, { invoiceId: invA.id, purpose: "expense", amountPaise: 16000, paidOn: "2026-04-07", method: "cash" });
-    expect((await mySharedItems(d, ua))[0]).toMatchObject({ status: "paid", balance: 0 });
-    // B's list is B's own
-    expect((await mySharedItems(d, ub)).every((i) => i.invoiceId !== invA.id)).toBe(true);
-    expect(await mySharedItems(d, "unknown-user")).toEqual([]);
   });
 });
 
@@ -927,7 +718,7 @@ describe("collect all dues since check-in", () => {
     await syncInvoices(d, adm, "2026-02", t); // only Feb exists; Jan/Mar/Apr were never billed
     await recordPayment(d, adm, { invoiceId: (await d.select().from(invoices).where(and(eq(invoices.tenantId, t), eq(invoices.periodMonth, "2026-02"))))[0].id, amountPaise: 30000, paidOn: "2026-02-06", method: "cash" });
 
-    const pre = await previewDues(d, t, "rent", TODAY);
+    const pre = await previewDues(d, t, TODAY);
     expect(pre.rows.map((r) => r.month)).toEqual(["2026-01", "2026-02", "2026-03", "2026-04"]); // oldest first, from the check-in month
     expect(pre.toBill).toBe(3);
     expect(pre.total).toBe(100000 + 70000 + 100000 + 100000); // Feb is partly paid already
@@ -942,11 +733,11 @@ describe("collect all dues since check-in", () => {
     expect(new Set((await d.select().from(payments).where(eq(payments.tenantId, t))).map((p) => p.receiptNo)).size).toBe(3); // a receipt per month
 
     // over-collecting is refused; empty amount collects everything that's left
-    await expect(collectDues(d, adm, { tenantId: t, amountPaise: 999999999, paidOn: "2026-04-10", method: "cash" }, TODAY)).rejects.toThrow(/more than the total rent due/);
+    await expect(collectDues(d, adm, { tenantId: t, amountPaise: 999999999, paidOn: "2026-04-10", method: "cash" }, TODAY)).rejects.toThrow(/more than the total due/);
     const rest = await collectDues(d, adm, { tenantId: t, paidOn: "2026-04-11", method: "cash" }, TODAY);
     expect(rest.remaining).toBe(0);
     expect((await d.select().from(invoices).where(eq(invoices.tenantId, t))).every((i) => i.paidPaise === i.totalPaise)).toBe(true);
-    await expect(collectDues(d, adm, { tenantId: t, paidOn: "2026-04-11", method: "cash" }, TODAY)).rejects.toThrow(/No rent is due/);
+    await expect(collectDues(d, adm, { tenantId: t, paidOn: "2026-04-11", method: "cash" }, TODAY)).rejects.toThrow(/Nothing is due/);
 
     // nothing leaks to other tenants; before the first due date there's nothing to collect
     expect((await d.select().from(payments).where(eq(payments.tenantId, other))).length).toBe(0);
@@ -961,26 +752,7 @@ describe("collect all dues since check-in", () => {
     const adm = await seedAdmin(d);
     const t = await addTenant(d, adm, { joining: "2026-01-01", name: "Left", rent: 100000 });
     await vacateTenant(d, adm, t, "2026-02-15");
-    expect((await previewDues(d, t, "rent", "2026-06-10")).rows.map((r) => r.month)).toEqual(["2026-01", "2026-02"]);
-  });
-});
-
-describe("expense categories", () => {
-  it("includes cooking gas with a readable label", async () => {
-    const { categoryLabel, EXPENSE_CATEGORIES } = await import("@/lib/categories");
-    const { addExpense } = await import("@/services/misc");
-    expect(EXPENSE_CATEGORIES).toContain("cooking_gas");
-    expect(categoryLabel("cooking_gas")).toBe("Gas cylinder");
-    expect(categoryLabel("repairs")).toBe("Repairs & maintenance");
-    expect(categoryLabel("something_new")).toBe("Something new");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const beds = await allBeds(d);
-    const a = await addTenant(d, adm, { bedId: beds[0].id, name: "Gas A", rent: 100000 });
-    await syncInvoices(d, adm, "2026-03");
-    await addExpense(d, adm, { category: "cooking_gas", amountPaise: 150000, spentOn: "2026-03-12", description: "LPG cylinder", share: { mode: "equal" } });
-    const [inv] = await d.select().from(invoices).where(eq(invoices.tenantId, a));
-    expect((await d.select().from(invoiceItems).where(eq(invoiceItems.invoiceId, inv.id))).some((i) => i.description === "Gas cylinder: LPG cylinder")).toBe(true);
+    expect((await previewDues(d, t, "2026-06-10")).rows.map((r) => r.month)).toEqual(["2026-01", "2026-02"]);
   });
 });
 
@@ -1014,195 +786,26 @@ describe("admin profile photo", () => {
   });
 });
 
-describe("rent vs expenses, optional description, and the merged payments list", () => {
-  it("keeps rent and expenses separate everywhere and shows reported + recorded payments together", async () => {
-    const { addExpense } = await import("@/services/misc");
-    const { rentVsExpenses } = await import("@/services/reports");
-    const { paymentActivity, filterCounts, matchesFilter } = await import("@/services/payment-activity");
-    const { createClaim, approveClaim, rejectClaim } = await import("@/services/claims");
-    const { myRentLedger } = await import("@/services/portal");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const beds = await allBeds(d);
-    const a = await addTenant(d, adm, { bedId: beds[0].id, name: "Split A", rent: 100000 });
-    const b = await addTenant(d, adm, { bedId: beds[1].id, name: "Split B", rent: 100000 });
-    const ua = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, a)))[0].userId;
-    const ub = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, b)))[0].userId;
-    await syncInvoices(d, adm, "2026-03");
-
-    // description is optional: blank falls back to the category name, and tenant bills read cleanly
-    const eid = await addExpense(d, adm, { category: "cooking_gas", amountPaise: 60000, spentOn: "2026-03-10", share: { mode: "equal" } });
-    expect((await d.select().from(expenses).where(eq(expenses.id, eid)))[0].description).toBe("Gas cylinder");
-    const items = await d.select().from(invoiceItems);
-    expect(items.filter((i) => i.expenseId === eid).every((i) => i.description === "Gas cylinder")).toBe(true); // not "Gas cylinder: Gas cylinder"
-    await addExpense(d, adm, { category: "water", amountPaise: 5000, spentOn: "2026-03-11", description: "   " }); // whitespace-only counts as blank
-    expect((await d.select().from(expenses).where(eq(expenses.category, "water")))[0].description).toBe("Water");
-
-    // admin dashboard split: each bill = rent 1000 + expense share 300
-    let s = await rentVsExpenses(d, "2026-03");
-    expect(s).toMatchObject({ rentBilled: 200000, rentCollected: 0, rentPending: 200000, expenseBilled: 60000, expenseCollected: 0, expensePending: 60000 });
-    const [invA] = await d.select().from(invoices).where(and(eq(invoices.tenantId, a), eq(invoices.periodMonth, "2026-03")));
-    await recordPayment(d, adm, { invoiceId: invA.id, amountPaise: 100000, paidOn: "2026-03-05", method: "cash" }); // the rent
-    await recordPayment(d, adm, { invoiceId: invA.id, purpose: "expense", amountPaise: 10000, paidOn: "2026-03-05", method: "cash" }); // 100 toward the expense share
-    s = await rentVsExpenses(d, "2026-03");
-    expect(s).toMatchObject({ rentCollected: 100000, rentPending: 100000, expenseCollected: 10000, expensePending: 50000 });
-    expect(s.rentCollected + s.rentPending).toBe(s.rentBilled);
-    expect(s.expenseCollected + s.expensePending).toBe(s.expenseBilled);
-
-    // the tenant's ledger carries the pieces the dashboard needs
-    const ledger = (await myRentLedger(d, ua, "2026-03"))!;
-    expect(ledger.months[0].invoice).toMatchObject({ rentPaise: 100000, otherPaise: 30000, adjustmentPaise: 0 });
-
-    // ONE payments list: recorded payments + reported ones (waiting / rejected); an approved report appears once, as the payment
-    const [invB] = await d.select().from(invoices).where(and(eq(invoices.tenantId, b), eq(invoices.periodMonth, "2026-03")));
-    const c1 = await createClaim(d, ub, { invoiceId: invB.id, amountPaise: 50000, paidOn: "2026-03-06", method: "upi", reference: "U1" }, "2026-03-10");
-    const c2 = await createClaim(d, ub, { invoiceId: invB.id, amountPaise: 20000, paidOn: "2026-03-07", method: "cash" }, "2026-03-10");
-    const c3 = await createClaim(d, ub, { invoiceId: invB.id, amountPaise: 10000, paidOn: "2026-03-08", method: "cash" }, "2026-03-10");
-    await approveClaim(d, adm, c1, 50000);
-    await rejectClaim(d, adm, c2, "Not received");
-    let rows = await paymentActivity(d);
-    expect(rows.filter((r) => r.kind === "claim").map((r) => [r.id === c3 ? "c3" : r.id === c2 ? "c2" : "c1", r.status]).sort()).toEqual([["c2", "rejected"], ["c3", "waiting"]]); // c1 became a real payment
-    expect(rows.filter((r) => r.kind === "payment").length).toBe(3); // A's rent payment + A's expense payment + the approved one
-    expect(rows[0].status).toBe("waiting"); // things needing action come first
-    let counts = filterCounts(rows);
-    expect(counts).toMatchObject({ all: 5, waiting: 1, paid: 3, cancelled: 1 });
-    expect(rows.filter((r) => matchesFilter(r, "waiting")).map((r) => r.tenantName)).toEqual(["Split B"]);
-    await voidPayment(d, adm, rows.find((r) => r.kind === "payment" && r.tenantName === "Split A")!.id, "wrong entry");
-    rows = await paymentActivity(d);
-    counts = filterCounts(rows);
-    expect(counts).toMatchObject({ all: 5, waiting: 1, paid: 2, cancelled: 2 }); // voided payments + rejected reports are both "cancelled"
-    expect(rows.find((r) => r.status === "cancelled" && r.kind === "payment")!.rejectReason).toBe("wrong entry");
-  });
-});
-
-describe("rent and expenses are paid separately", () => {
-  it("each purpose has its own balance, limit, report and void — and expenses split to active tenants by default", async () => {
-    const { addExpense } = await import("@/services/misc");
-    const { invoiceBuckets, openBills } = await import("@/services/billing");
-    const { createClaim, approveClaim } = await import("@/services/claims");
-    const { rentVsExpenses, monthlySummary } = await import("@/services/reports");
-    const { EXPENSE_CATEGORIES } = await import("@/lib/categories");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-
-    // expense categories are fixed to exactly three
-    expect([...EXPENSE_CATEGORIES]).toEqual(["electricity", "water", "cooking_gas"]);
-
-    // an expense with nobody living here is simply the owner's own cost (the default split must not error)
-    const lonely = await addExpense(d, adm, { category: "electricity", amountPaise: 30000, spentOn: "2026-03-02", share: { mode: "equal" } });
-    expect((await d.select().from(expenses).where(eq(expenses.id, lonely)))[0].shareMode).toBe("none");
-
-    const beds = await allBeds(d);
-    const a = await addTenant(d, adm, { bedId: beds[0].id, name: "Sep A", rent: 100000 });
-    const b = await addTenant(d, adm, { bedId: beds[1].id, name: "Sep B", rent: 100000 });
-    const ua = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, a)))[0].userId;
-    await syncInvoices(d, adm, "2026-03");
-    // default = split equally among the ACTIVE tenants: 2 tenants -> 300 each
-    const gas = await addExpense(d, adm, { category: "cooking_gas", amountPaise: 60000, spentOn: "2026-03-10", share: { mode: "equal" } });
-    expect((await d.select().from(expenses).where(eq(expenses.id, gas)))[0].shareMode).toBe("equal");
-    const [inv] = await d.select().from(invoices).where(and(eq(invoices.tenantId, a), eq(invoices.periodMonth, "2026-03")));
-
-    let bk = await invoiceBuckets(d, inv.id);
-    expect(bk).toMatchObject({ rentPayable: 100000, rentBalance: 100000, expensePayable: 30000, expenseBalance: 30000 });
-
-    // paying EXPENSES never reduces rent, and vice versa
-    await recordPayment(d, adm, { invoiceId: inv.id, purpose: "expense", amountPaise: 12000, paidOn: "2026-03-05", method: "cash" });
-    bk = await invoiceBuckets(d, inv.id);
-    expect(bk).toMatchObject({ rentBalance: 100000, expenseBalance: 18000 });
-    const after = (await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0];
-    expect([after.paidPaise, after.rentPaidPaise, after.expensePaidPaise]).toEqual([12000, 0, 12000]); // total = rent + expense, always
-
-    // each purpose has its OWN limit: 200 of expenses left, so 250 is refused even though rent is still unpaid
-    await expect(recordPayment(d, adm, { invoiceId: inv.id, purpose: "expense", amountPaise: 25000, paidOn: "2026-03-06", method: "cash" })).rejects.toThrow(/exceeds the outstanding expenses balance/);
-    await expect(recordPayment(d, adm, { invoiceId: inv.id, purpose: "rent", amountPaise: 100001, paidOn: "2026-03-06", method: "cash" })).rejects.toThrow(/exceeds the outstanding rent balance/);
-    await recordPayment(d, adm, { invoiceId: inv.id, purpose: "expense", amountPaise: 18000, paidOn: "2026-03-06", method: "cash" });
-    await expect(recordPayment(d, adm, { invoiceId: inv.id, purpose: "expense", amountPaise: 1, paidOn: "2026-03-07", method: "cash" })).rejects.toThrow(/expenses on this bill is already fully paid/);
-    expect(await invoiceBuckets(d, inv.id)).toMatchObject({ rentBalance: 100000, expenseBalance: 0 });
-    expect((await openBills(d)).find((o) => o.id === inv.id)).toMatchObject({ rentBalance: 100000, expenseBalance: 0 });
-
-    // a tenant's reports are per purpose too, and approving one updates only its own bucket
-    const rentClaim = await createClaim(d, ua, { invoiceId: inv.id, purpose: "rent", amountPaise: 100000, paidOn: "2026-03-08", method: "upi" }, "2026-03-10");
-    await expect(createClaim(d, ua, { invoiceId: inv.id, purpose: "rent", amountPaise: 1, paidOn: "2026-03-08", method: "upi" }, "2026-03-10")).rejects.toThrow(/already covers/); // rent is fully reported…
-    await expect(createClaim(d, ua, { invoiceId: inv.id, purpose: "expense", amountPaise: 1, paidOn: "2026-03-08", method: "upi" }, "2026-03-10")).rejects.toThrow(/expenses on this bill is already fully paid/); // …and expenses are already paid
-    await approveClaim(d, adm, rentClaim);
-    expect(await invoiceBuckets(d, inv.id)).toMatchObject({ rentBalance: 0, expenseBalance: 0 });
-    expect((await d.select().from(payments).where(eq(payments.purpose, "rent"))).length).toBe(1);
-
-    // reports keep the two apart: B has paid nothing, A paid everything
-    expect(await rentVsExpenses(d, "2026-03")).toMatchObject({ rentBilled: 200000, rentCollected: 100000, rentPending: 100000, expenseBilled: 60000, expenseCollected: 30000, expensePending: 30000 });
-    const m = (await monthlySummary(d, "2026-03", "2026-03"))[0];
-    expect(m.collected).toMatchObject({ rent: 100000, other: 30000, total: 130000 }); // the gas-cylinder share lands under expenses, not rent
-    expect(m.collected.rent + m.collected.electricity + m.collected.water + m.collected.other).toBe(m.collected.total);
-
-    // cancelling (voiding) an EXPENSE payment reopens only the expense side
-    const expPay = (await d.select().from(payments).where(eq(payments.purpose, "expense")))[0];
-    await voidPayment(d, adm, expPay.id, "entered wrongly");
-    expect(await invoiceBuckets(d, inv.id)).toMatchObject({ rentBalance: 0, expenseBalance: expPay.amountPaise });
-
-    // a discount can't push either side below what was already paid toward it
-    const [invB] = await d.select().from(invoices).where(and(eq(invoices.tenantId, b), eq(invoices.periodMonth, "2026-03")));
-    await recordPayment(d, adm, { invoiceId: invB.id, amountPaise: 100000, paidOn: "2026-03-09", method: "cash" }); // all of B's rent
-    await expect(addInvoiceItem(d, adm, invB.id, "adjustment", "too big", 20000)).rejects.toThrow(/less than what is already paid/); // discount comes off the PAID rent
-    await expect(addInvoiceItem(d, adm, invB.id, "adjustment", "still too big", 5000)).rejects.toThrow(/less than what is already paid/); // any discount reaches the rent first, and that is already fully paid
-  });
-});
-
-describe("each expense is paid on its own", () => {
-  it("paying one expense never marks another as paid; reports are tied to one expense", async () => {
-    const { mySharedItems } = await import("@/services/portal");
-    const { createClaim, approveClaim } = await import("@/services/claims");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const t = await addTenant(d, adm, { name: "Per Item", rent: 100000 });
-    const userId = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0].userId;
-    const month = "2026-03";
-    await addExpense(d, adm, { category: "water", amountPaise: 30000, spentOn: `${month}-05`, description: "Water", share: { mode: "equal" } });
-    await addExpense(d, adm, { category: "electricity", amountPaise: 50000, spentOn: `${month}-06`, description: "Electricity", share: { mode: "equal" } });
-    await addExpense(d, adm, { category: "cooking_gas", amountPaise: 20000, spentOn: `${month}-07`, description: "Cylinder", share: { mode: "equal" } });
-    const lines = await mySharedItems(d, userId);
-    expect(lines.map((l) => l.category).sort()).toEqual(["cooking_gas", "electricity", "water"]);
-    const gas = lines.find((l) => l.category === "cooking_gas")!;
-    const water = lines.find((l) => l.category === "water")!;
-    const inv = (await d.select().from(invoices).where(eq(invoices.tenantId, t)))[0];
-
-    // tenant reports ONLY the gas cylinder → it waits for the owner; nothing else changes
-    const claimId = await createClaim(d, userId, { invoiceId: inv.id, purpose: "expense", invoiceItemId: gas.itemId, amountPaise: gas.balance, paidOn: `${month}-10`, method: "upi" }, `${month}-10`);
-    let now = await mySharedItems(d, userId);
-    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ pending: gas.balance, status: "unpaid" });
-    expect(now.filter((l) => l.category !== "cooking_gas").every((l) => l.pending === 0)).toBe(true);
-    // asking again for the same expense, or for more than it costs, is refused
-    await expect(createClaim(d, userId, { invoiceId: inv.id, purpose: "expense", invoiceItemId: gas.itemId, amountPaise: 1, paidOn: `${month}-10`, method: "cash" }, `${month}-10`)).rejects.toThrow(/waiting/);
-    await expect(createClaim(d, userId, { invoiceId: inv.id, purpose: "expense", amountPaise: 100, paidOn: `${month}-10`, method: "cash" }, `${month}-10`)).rejects.toThrow(/Choose which expense/);
-    await expect(createClaim(d, userId, { invoiceId: inv.id, purpose: "expense", invoiceItemId: water.itemId, amountPaise: water.balance + 1, paidOn: `${month}-10`, method: "cash" }, `${month}-10`)).rejects.toThrow(/left to pay/);
-
-    // owner confirms → ONLY the gas cylinder becomes paid; water and electricity stay unpaid
-    await approveClaim(d, adm, claimId);
-    now = await mySharedItems(d, userId);
-    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "paid", balance: 0 });
-    expect(now.find((l) => l.category === "water")).toMatchObject({ status: "unpaid", balance: water.balance });
-    expect(now.find((l) => l.category === "electricity")).toMatchObject({ status: "unpaid" });
-    // the rent was never touched
-    expect((await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0]).toMatchObject({ rentPaidPaise: 0, expensePaidPaise: gas.balance });
-  });
-});
-
 describe("vacated tenants", () => {
-  it("can still have their details corrected, but stay vacated and can't be vacated through the edit form", async () => {
+  it("can have their details corrected; the edit form can vacate (with a date) and reopen a tenant", async () => {
     const { updateTenant } = await import("@/services/tenants");
     const d = await testDb();
     const adm = await seedAdmin(d);
     const t = await addTenant(d, adm, { name: "Left Tenant", joining: "2026-01-01" });
     const live = await addTenant(d, adm, { name: "Still Here", joining: "2026-01-01" });
     const base = { name: "Left Tenant Fixed", email: "left.fixed@example.test", phone: "9111111111", joiningDate: "2026-01-01", monthlyRentPaise: 120000, securityDepositPaise: 50000 };
-    await expect(updateTenant(d, adm, live, { ...base, email: "x@example.test", status: "moved_out" })).rejects.toThrow(/Vacate action/);
+    await expect(updateTenant(d, adm, live, { ...base, email: "x@example.test", status: "moved_out" })).rejects.toThrow(/vacated date/i);
     await vacateTenant(d, adm, t, "2026-02-10");
-    await updateTenant(d, adm, t, { ...base, status: "moved_out" });
+    await updateTenant(d, adm, t, { ...base, status: "moved_out", moveOutDate: "2026-02-10" });
     const [p] = await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t));
     expect(p).toMatchObject({ status: "moved_out", phone: "9111111111", monthlyRentPaise: 120000, moveOutDate: "2026-02-10" });
     expect((await d.select().from(users).where(eq(users.id, p.userId)))[0]).toMatchObject({ name: "Left Tenant Fixed", email: "left.fixed@example.test" });
-    // even if the form says "active", a vacated tenant is not brought back
+    // vacate through the form, with a date
+    await updateTenant(d, adm, live, { ...base, email: "x@example.test", status: "moved_out", moveOutDate: "2026-03-05" });
+    expect((await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, live)))[0]).toMatchObject({ status: "moved_out", moveOutDate: "2026-03-05" });
+    // setting it back to active reopens the tenant
     await updateTenant(d, adm, t, { ...base, status: "active" });
-    expect((await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0].status).toBe("moved_out");
+    expect((await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0]).toMatchObject({ status: "active", moveOutDate: null });
   });
 });
 
@@ -1224,54 +827,18 @@ describe("undo vacate and mark paid", () => {
     expect(await revertVacate(d, adm, a)).toEqual({ bedBack: false });
   });
 
-  it("mark paid settles only the rent, or only one expense line", async () => {
+  it("mark paid settles the whole remaining balance, once", async () => {
     const { markPaid } = await import("@/services/billing");
-    const { mySharedItems } = await import("@/services/portal");
     const d = await testDb();
     const adm = await seedAdmin(d);
     const t = await addTenant(d, adm, { name: "Mark Paid", rent: 100000 });
-    const userId = (await d.select().from(tenantProfiles).where(eq(tenantProfiles.id, t)))[0].userId;
-    await addExpense(d, adm, { category: "water", amountPaise: 30000, spentOn: "2026-03-05", description: "", share: { mode: "equal" } });
-    await addExpense(d, adm, { category: "cooking_gas", amountPaise: 20000, spentOn: "2026-03-06", description: "", share: { mode: "equal" } });
+    await syncInvoices(d, adm, "2026-03");
     const inv = (await d.select().from(invoices).where(eq(invoices.tenantId, t)))[0];
-    const water = (await mySharedItems(d, userId)).find((l) => l.category === "water")!;
-    await markPaid(d, adm, { invoiceId: inv.id, itemId: water.itemId, method: "cash" });
-    let now = await mySharedItems(d, userId);
-    expect(now.find((l) => l.category === "water")).toMatchObject({ status: "paid" });
-    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "unpaid" });
-    await expect(markPaid(d, adm, { invoiceId: inv.id, itemId: water.itemId, method: "cash" })).rejects.toThrow(/already paid/);
-    await markPaid(d, adm, { invoiceId: inv.id, method: "upi" });
-    expect((await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0]).toMatchObject({ rentPaidPaise: 100000, expensePaidPaise: 30000 });
-    now = await mySharedItems(d, userId);
-    expect(now.find((l) => l.category === "cooking_gas")).toMatchObject({ status: "unpaid" });
+    await recordPayment(d, adm, { invoiceId: inv.id, amountPaise: 30000, paidOn: "2026-03-02", method: "cash" });
+    const r = await markPaid(d, adm, { invoiceId: inv.id, method: "upi" });
+    expect(r.receiptNo).toBeTruthy();
+    expect((await d.select().from(invoices).where(eq(invoices.id, inv.id)))[0]).toMatchObject({ totalPaise: 100000, paidPaise: 100000 });
     await expect(markPaid(d, adm, { invoiceId: inv.id, method: "upi" })).rejects.toThrow(/already paid/);
-  });
-});
-
-describe("expense status (active / completed)", () => {
-  it("stays active until every tenant has paid, then completes; lists who paid", async () => {
-    const { expenseStatuses } = await import("@/services/expense-status");
-    const { markPaid } = await import("@/services/billing");
-    const d = await testDb();
-    const adm = await seedAdmin(d);
-    const beds = await allBeds(d);
-    await addTenant(d, adm, { name: "Pay One", bedId: beds[0].id });
-    await addTenant(d, adm, { name: "Pay Two", bedId: beds[1].id });
-    const id = await addExpense(d, adm, { category: "cooking_gas", amountPaise: 100000, spentOn: "2026-03-05", description: "", share: { mode: "equal" } });
-    const solo = await addExpense(d, adm, { category: "water", amountPaise: 5000, spentOn: "2026-03-05", description: "" });
-    const get = async () => (await expenseStatuses(d, [{ id, utilityBillId: null }, { id: solo, utilityBillId: null }]));
-    let s = (await get()).get(id)!;
-    expect(s).toMatchObject({ state: "active", paidCount: 0, total: 2 });
-    expect((await get()).get(solo)!.state).toBe("none"); // not shared with anyone
-    // first tenant pays: still active, one of two paid, the unpaid tenant is listed first
-    await markPaid(d, adm, { invoiceId: s.rows[0].invoiceId!, itemId: (await d.select().from(invoiceItems).where(and(eq(invoiceItems.invoiceId, s.rows[0].invoiceId!), eq(invoiceItems.expenseId, id))))[0].id, method: "cash" });
-    s = (await get()).get(id)!;
-    expect(s).toMatchObject({ state: "active", paidCount: 1, total: 2 });
-    expect(s.rows.map((r) => r.state)).toEqual(["unpaid", "paid"]);
-    // second tenant pays: completed
-    await markPaid(d, adm, { invoiceId: s.rows[0].invoiceId!, itemId: (await d.select().from(invoiceItems).where(and(eq(invoiceItems.invoiceId, s.rows[0].invoiceId!), eq(invoiceItems.expenseId, id))))[0].id, method: "upi" });
-    s = (await get()).get(id)!;
-    expect(s).toMatchObject({ state: "completed", paidCount: 2, total: 2 });
   });
 });
 

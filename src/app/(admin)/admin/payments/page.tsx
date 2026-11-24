@@ -8,7 +8,6 @@ import { getDb } from "@/db/client";
 import { formatDate, monthLabel } from "@/lib/dates";
 import { formatINR, paiseToInput } from "@/lib/money";
 import { methodLabel } from "@/lib/payment-methods";
-import { purposeLabel } from "@/lib/billing";
 import { pageParam, slicePage } from "@/lib/page";
 import { requireAdmin } from "@/lib/session";
 import { MarkPaidButton } from "@/components/mark-paid-button";
@@ -58,7 +57,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
       {board ? (
         tenants.length === 0 ? <Empty>No active tenants yet.</Empty> : (
           <Table>
-            <thead><tr><Th>Tenant</Th><Th>Rent</Th><Th>Expenses</Th><Th className="text-right">Action</Th></tr></thead>
+            <thead><tr><Th>Tenant</Th><Th>Rent</Th><Th className="text-right">Action</Th></tr></thead>
             <tbody>
               {tenants.map((t) => {
                 const items = (unpaid.get(t.tenantId) ?? []).filter((i) => i.month === month);
@@ -74,20 +73,11 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="tabular-nums">{formatINR(t.rent.amount)}</span><Badge kind={t.rent.state} /></div>
                       )}
                     </Td>
-                    <Td className="!whitespace-normal">
-                      {t.expenseLines.length === 0 ? <span className="text-muted">—</span> : (
-                        <ul className="space-y-1">
-                          {t.expenseLines.map((l, i) => (
-                            <li key={i} className="flex flex-wrap items-center gap-x-2 text-sm"><span>{l.label}</span><span className="tabular-nums text-muted">{formatINR(l.amount)}</span><Badge kind={l.paid ? "paid" : "unpaid"} /></li>
-                          ))}
-                        </ul>
-                      )}
-                    </Td>
                     <Td>
                       <RowActions>
                         <Link href={`/admin/payments/tenant/${t.tenantId}`} title="View payments" aria-label="View payments" className={iconButtonClass()}><Eye className="size-4" aria-hidden /></Link>
                         <MarkPaidButton name={t.name} items={items} />
-                        <RevertPaidButton name={t.name} rows={mine.map((p) => ({ id: p.id, what: `${p.what} · ${monthLabel(p.month)}`, amount: p.amount, paidOn: p.paidOn, method: p.method }))} />
+                        <RevertPaidButton name={t.name} rows={mine.map((p) => ({ id: p.id, what: `Rent · ${monthLabel(p.month)}`, amount: p.amount, paidOn: p.paidOn, method: p.method }))} />
                       </RowActions>
                     </Td>
                   </tr>
@@ -104,7 +94,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
               <tr key={r.key} className={r.status === "cancelled" || r.status === "rejected" ? "text-muted" : ""}>
                 <Td>{formatDate(r.date)}</Td>
                 <Td><Link href={`/admin/tenants/${r.tenantId}`} className="font-medium hover:underline">{r.tenantName}</Link>{r.kind === "claim" && r.note && <span className="block max-w-48 whitespace-normal text-xs font-normal text-muted">{r.note}</span>}</Td>
-                <Td><Link className="hover:underline" href={`/admin/invoices/${r.invoiceId}`}>{monthLabel(r.month)}</Link><span className="block text-xs text-muted">{purposeLabel(r.purpose)}</span></Td>
+                <Td><Link className="hover:underline" href={`/admin/invoices/${r.invoiceId}`}>{monthLabel(r.month)}</Link></Td>
                 <Td className={`text-right tabular-nums ${r.status === "cancelled" ? "line-through" : ""}`}>{formatINR(r.amountPaise)}</Td>
                 <Td>{methodLabel(r.method)}{r.reference ? <span className="block text-xs text-muted">{r.reference}</span> : null}</Td>
                 <Td>
@@ -119,7 +109,7 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
                         <ConfirmButton
                           label="Approve"
                           variant="primary"
-                          title={`Confirm ${purposeLabel(r.purpose).toLowerCase()} ${formatINR(r.amountPaise)} from ${r.tenantName}?`}
+                          title={`Confirm ${formatINR(r.amountPaise)} from ${r.tenantName}?`}
                           body="This records a real payment and issues a receipt. Only confirm once you've seen the money arrive."
                           confirmLabel="Confirm payment"
                           extra={<div className="mt-3"><Field label="Amount received (₹)" hint={`Still due on this bill: ${formatINR(Math.max(r.balance, 0))}`}><Input name="amount" inputMode="decimal" required defaultValue={paiseToInput(Math.min(r.amountPaise, Math.max(r.balance, 0)))} /></Field></div>}

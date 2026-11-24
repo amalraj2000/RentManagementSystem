@@ -11,7 +11,6 @@ import { invoices, tenantProfiles, users } from "@/db/schema";
 import { formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { previewDues } from "@/services/collect";
-import { purposeLabel, type Purpose } from "@/lib/billing";
 import { openBills } from "@/services/billing";
 
 export const metadata = { title: "Record payment" };
@@ -28,13 +27,11 @@ function Toggle({ on, href, label, hint }: { on: boolean; href: string; label: s
   );
 }
 
-export default async function NewPayment({ searchParams }: { searchParams: Promise<{ invoice?: string; mode?: string; tenant?: string; purpose?: string }> }) {
+export default async function NewPayment({ searchParams }: { searchParams: Promise<{ invoice?: string; mode?: string; tenant?: string }> }) {
   const sp = await searchParams;
   const db = getDb();
   const collectAll = sp.mode === "all";
-  const purpose: Purpose = sp.purpose === "expense" ? "expense" : "rent";
-  const dues = purposeLabel(purpose).toLowerCase();
-  const toggle = <Toggle on={collectAll} href={collectAll ? "/admin/payments/new" : "/admin/payments/new?mode=all"} label="Collect all dues since check-in" hint="One entry settles rent (or expenses) for every month from the check-in date up to the last due date, oldest first." />;
+  const toggle = <Toggle on={collectAll} href={collectAll ? "/admin/payments/new" : "/admin/payments/new?mode=all"} label="Collect all dues since check-in" hint="One entry settles the rent for every month from the check-in date up to the last due date, oldest first." />;
 
   if (collectAll) {
     const tenants = await db
@@ -43,23 +40,15 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
       .innerJoin(users, eq(users.id, tenantProfiles.userId))
       .orderBy(asc(users.name));
     const selected = tenants.find((t) => t.id === sp.tenant) ?? null;
-    const preview = selected ? await previewDues(db, selected.id, purpose) : null;
+    const preview = selected ? await previewDues(db, selected.id) : null;
     return (
       <>
         <BackLink href="/admin/payments" label="Payments" />
         <PageHeader title="Record payment" />
         <div className="mb-4 max-w-2xl">{toggle}</div>
         <Card className="max-w-2xl p-5">
-          <div className="mb-4 flex gap-1.5" role="tablist" aria-label="What to collect">
-            {(["rent", "expense"] as const).map((p) => (
-              <Link key={p} role="tab" aria-selected={purpose === p} href={`/admin/payments/new?mode=all&purpose=${p}${selected ? `&tenant=${selected.id}` : ""}`} className={`rounded-lg px-3 py-1.5 text-sm font-medium ${purpose === p ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
-                Collect {purposeLabel(p).toLowerCase()} dues
-              </Link>
-            ))}
-          </div>
           <form method="get" className="mb-4">
             <input type="hidden" name="mode" value="all" />
-            <input type="hidden" name="purpose" value={purpose} />
             <Field label="Tenant">
               <Select name="tenant" defaultValue={selected?.id ?? ""} required>
                 <option value="" disabled>Select a tenant…</option>
@@ -69,10 +58,10 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
             <button className="mt-2 text-sm font-medium text-accent hover:underline">Show dues</button>
           </form>
           {preview && selected && (
-            preview.rows.length === 0 ? <Empty>No {dues} is due for {selected.name} up to the last due date.</Empty> : (
+            preview.rows.length === 0 ? <Empty>Nothing is due for {selected.name} up to the last due date.</Empty> : (
               <>
                 <p className="mb-2 text-sm text-slate-700">
-                  {purposeLabel(purpose)} dues for <strong>{selected.name}</strong> from check-in ({formatDate(preview.tenant.joiningDate)}) through <strong>{monthLabel(preview.lastDueMonth)}</strong>
+                  Dues for <strong>{selected.name}</strong> from check-in ({formatDate(preview.tenant.joiningDate)}) through <strong>{monthLabel(preview.lastDueMonth)}</strong>
                   {preview.toBill > 0 && <> — {preview.toBill} month{preview.toBill > 1 ? "s" : ""} without a bill will be billed first.</>}
                 </p>
                 <Table>
@@ -88,8 +77,7 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
                     <tr><Td className="font-semibold">Total{preview.toBill > 0 ? " (estimate)" : ""}</Td><Td /><Td className="text-right font-semibold tabular-nums">{formatINR(preview.total)}</Td></tr>
                   </tbody>
                 </Table>
-                <ActionForm action={collectDuesAction.bind(null, selected.id)} submit={`Collect ${dues}`} redirectTo="/admin/payments" reset={false} className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <input type="hidden" name="purpose" value={purpose} />
+                <ActionForm action={collectDuesAction.bind(null, selected.id)} submit="Collect dues" redirectTo="/admin/payments" reset={false} className="mt-4 grid gap-3 sm:grid-cols-2">
                   <Field label="Amount received (₹)" hint={`Leave empty to collect everything (${formatINR(preview.total)}).`}><Input name="amount" inputMode="decimal" placeholder={`All dues · ${formatINR(preview.total)}`} /></Field>
                   <Field label="Payment date"><Input name="paidOn" type="date" required defaultValue={todayISO()} /></Field>
                   <Field label="Method">
@@ -107,7 +95,7 @@ export default async function NewPayment({ searchParams }: { searchParams: Promi
   }
 
   const open = await openBills(db);
-  const bills = open.map((o) => ({ id: o.id, label: `${o.name} — ${monthLabel(o.month)}`, rentBalance: o.rentBalance, expenseBalance: o.expenseBalance }));
+  const bills = open.map((o) => ({ id: o.id, label: `${o.name} — ${monthLabel(o.month)}`, balance: o.balance }));
   return (
     <div className="mx-auto max-w-xl">
       <BackLink href="/admin/payments" label="Payments" />

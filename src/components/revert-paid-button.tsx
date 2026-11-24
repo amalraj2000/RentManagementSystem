@@ -7,7 +7,7 @@ import { methodLabel } from "@/lib/payment-methods";
 
 export type PaidRow = { id: string; what: string; amount: number; paidOn: string; method: string };
 
-/** "Revert": lists what was paid (rent and each expense on its own) so a payment marked by mistake can be taken back. */
+/** "Revert": lists what was paid so a payment marked by mistake can be taken back. */
 export function RevertPaidButton({ name, rows, iconOnly }: { name: string; rows: PaidRow[]; iconOnly?: boolean }) {
   if (rows.length === 0) return null;
   return (

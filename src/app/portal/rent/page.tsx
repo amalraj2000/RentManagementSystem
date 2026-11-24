@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Badge, Card, Empty, PageHeader, Pager } from "@/components/ui";
 import { getDb } from "@/db/client";
-import { rentState, splitRentExpense } from "@/lib/billing";
+import { rentState } from "@/lib/billing";
 import { currentMonth, formatDate, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import { pageParam, slicePage } from "@/lib/page";
@@ -22,7 +22,7 @@ export default async function PortalRent({ searchParams }: { searchParams: Promi
   if (!ledger) return <Card><Empty>No tenant profile found.</Empty></Card>;
   const today = todayISO();
   const { items, total, page: current } = slicePage(ledger.months, page);
-  const waiting = (invoiceId: string) => claims.filter((c) => c.invoiceId === invoiceId && c.status === "pending" && c.purpose === "rent").reduce((a, c) => a + c.amountPaise, 0);
+  const waiting = (invoiceId: string) => claims.filter((c) => c.invoiceId === invoiceId && c.status === "pending").reduce((a, c) => a + c.amountPaise, 0);
   return (
     <>
       <PageHeader title="Rent" description={`Since you joined on ${formatDate(ledger.tenant.joiningDate)}`} />
@@ -44,19 +44,20 @@ export default async function PortalRent({ searchParams }: { searchParams: Promi
                     </tr>
                   );
                 }
-                const sp = splitRentExpense({ rent: inv.rentPaise, other: inv.otherPaise, adjustment: inv.adjustmentPaise }, { rent: inv.rentPaidPaise, expense: inv.expensePaidPaise }, { rent: waiting(inv.id), expense: 0 });
-                const state = rentState({ totalPaise: sp.rentPayable, paidPaise: sp.rentCovered, dueDate: inv.dueDate }, sp.pendingRent, today);
-                const canPay = sp.rentBalance - sp.pendingRent > 0;
+                const balance = Math.max(inv.totalPaise - inv.paidPaise, 0);
+                const pending = Math.min(waiting(inv.id), balance);
+                const state = rentState({ totalPaise: inv.totalPaise, paidPaise: inv.paidPaise, dueDate: inv.dueDate }, pending, today);
+                const canPay = balance - pending > 0;
                 return (
                   <tr key={month}>
                     <td className={td}>
                       <Link href={`/portal/invoices/${inv.id}`} className="font-medium hover:underline">{monthLabel(month)}</Link>
                     </td>
-                    <td className={`${td} text-right tabular-nums`}>{formatINR(sp.rentPayable)}</td>
+                    <td className={`${td} text-right tabular-nums`}>{formatINR(inv.totalPaise)}</td>
                     <td className={td}><Badge kind={state} wrap /></td>
                     <td className={`${td} text-right`}>
                       {canPay ? (
-                        <Link href={`/portal/invoices/${inv.id}/pay?${new URLSearchParams({ for: "rent", amount: String(sp.rentBalance - sp.pendingRent), note: `For: Rent ${monthLabel(month)}` })}`} className="inline-flex h-8 items-center justify-center rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent-hover">Pay</Link>
+                        <Link href={`/portal/invoices/${inv.id}/pay?${new URLSearchParams({ amount: String(balance - pending), note: `For: Rent ${monthLabel(month)}` })}`} className="inline-flex h-8 items-center justify-center rounded-lg bg-accent px-3 text-xs font-medium text-white hover:bg-accent-hover">Pay</Link>
                       ) : <span className="text-muted">—</span>}
                     </td>
                   </tr>

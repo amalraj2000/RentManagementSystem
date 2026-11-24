@@ -1,7 +1,7 @@
 import { and, desc, eq, isNull, lt, ne, sql } from "drizzle-orm";
 import type { DB } from "@/db/client";
 import { invoices, notifications, tenantProfiles, users } from "@/db/schema";
-import { invoiceSplits } from "./reports";
+import { invoiceBalances } from "./reports";
 import { formatDate, monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import type { Q } from "./common";
@@ -84,18 +84,16 @@ const addDays = (d: string, n: number) => new Date(Date.UTC(+d.slice(0, 4), +d.s
 
 /** Idempotent per invoice thanks to dedupe keys: running it many times a day notifies once. */
 export async function runReminders(db: DB, today: string, now = Date.now()) {
-  // Rent and expenses are reminded about separately: each message names what is due for each.
-  const open = (await invoiceSplits(db)).filter((i) => i.split.rentBalance + i.split.expenseBalance > 0);
+  const open = await invoiceBalances(db).then((all) => all.filter((i) => i.balance > 0));
   let made = 0;
   const admins = await adminIds(db);
   for (const inv of open) {
-    const dueText = [inv.split.rentBalance > 0 && `rent ${formatINR(inv.split.rentBalance)}`, inv.split.expenseBalance > 0 && `expenses ${formatINR(inv.split.expenseBalance)}`].filter(Boolean).join(" and ");
     if (today > inv.dueDate) {
-      await notifyUsers(db, [inv.userId], { type: "invoice_overdue", title: "Payment overdue", body: `Your ${monthLabel(inv.periodMonth)} ${dueText} ${inv.split.rentBalance > 0 && inv.split.expenseBalance > 0 ? "were" : "was"} due on ${formatDate(inv.dueDate)}.`, href: `/portal/invoices/${inv.id}`, dedupeKey: `overdue:${inv.id}` });
-      await notifyUsers(db, admins, { type: "invoice_overdue", title: `${inv.name} is overdue`, body: `${monthLabel(inv.periodMonth)} · ${dueText} outstanding, due ${formatDate(inv.dueDate)}.`, href: `/admin/invoices/${inv.id}`, dedupeKey: `overdue:${inv.id}` });
+      await notifyUsers(db, [inv.userId], { type: "invoice_overdue", title: "Payment overdue", body: `Your ${monthLabel(inv.periodMonth)} rent ${formatINR(inv.balance)} was due on ${formatDate(inv.dueDate)}.`, href: `/portal/invoices/${inv.id}`, dedupeKey: `overdue:${inv.id}` });
+      await notifyUsers(db, admins, { type: "invoice_overdue", title: `${inv.name} is overdue`, body: `${monthLabel(inv.periodMonth)} · ${formatINR(inv.balance)} outstanding, due ${formatDate(inv.dueDate)}.`, href: `/admin/invoices/${inv.id}`, dedupeKey: `overdue:${inv.id}` });
       made++;
     } else if (inv.dueDate <= addDays(today, DUE_SOON_DAYS)) {
-      await notifyUsers(db, [inv.userId], { type: "invoice_due_soon", title: "Payment due soon", body: `Your ${monthLabel(inv.periodMonth)} ${dueText} ${inv.split.rentBalance > 0 && inv.split.expenseBalance > 0 ? "are" : "is"} due on ${formatDate(inv.dueDate)}.`, href: `/portal/invoices/${inv.id}`, dedupeKey: `due:${inv.id}` });
+      await notifyUsers(db, [inv.userId], { type: "invoice_due_soon", title: "Payment due soon", body: `Your ${monthLabel(inv.periodMonth)} rent ${formatINR(inv.balance)} is due on ${formatDate(inv.dueDate)}.`, href: `/portal/invoices/${inv.id}`, dedupeKey: `due:${inv.id}` });
       made++;
     }
   }

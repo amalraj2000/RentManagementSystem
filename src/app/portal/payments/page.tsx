@@ -5,7 +5,6 @@ import { pageParam, slicePage } from "@/lib/page";
 import { getDb } from "@/db/client";
 import { formatDate, formatDateShort, monthLabel, monthLabelShort } from "@/lib/dates";
 import { methodLabel } from "@/lib/payment-methods";
-import { purposeLabel } from "@/lib/billing";
 import { formatINR } from "@/lib/money";
 import { requireTenant } from "@/lib/session";
 import { myClaims } from "@/services/claims";
@@ -37,7 +36,7 @@ export default async function PortalPayments({ searchParams }: { searchParams: P
                 <li key={c.id} className="px-4 py-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-medium tabular-nums">{formatINR(c.amountPaise)} <span className="font-normal text-muted">· {purposeLabel(c.purpose)} · {monthLabel(c.month)}</span></p>
+                      <p className="font-medium tabular-nums">{formatINR(c.amountPaise)} <span className="font-normal text-muted">· {monthLabel(c.month)}</span></p>
                       <p className="text-xs text-muted">{formatDate(c.paidOn)} · {c.method.replace("_", " ")}{c.reference ? ` · ${c.reference}` : ""}</p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -68,7 +67,6 @@ export default async function PortalPayments({ searchParams }: { searchParams: P
                   <td className={`${td} whitespace-nowrap font-medium`}>
                     <span className="sm:hidden">{monthLabelShort(p.periodMonth)}</span>
                     <span className="hidden sm:inline">{monthLabel(p.periodMonth)}</span>
-                    <span className="block text-[11px] font-normal text-muted">{purposeLabel(p.purpose)}</span>
                   </td>
                   <td className={`${td} whitespace-nowrap text-right tabular-nums`}>{formatINR(p.amountPaise)}</td>
                   <td className={`${td} whitespace-nowrap`}>

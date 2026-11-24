@@ -1,12 +1,12 @@
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { MAX_ACTIVE_TENANTS } from "@/lib/features";
 import type { DB } from "@/db/client";
-import { bedAssignments, beds, invoices, payments, rooms, tenantDocuments, tenantProfiles, users } from "@/db/schema";
+import { bedAssignments, beds, invoices, payments, rooms, sessions, tenantDocuments, tenantProfiles, users } from "@/db/schema";
 import { hashPassword, passwordProblem, destroyUserSessions } from "@/lib/auth-core";
 import { AppError, audit, type Q } from "./common";
 import { saveDocumentTx, type ValidFile } from "./documents";
 import { notifyAdmins, notifyTenant } from "./notifications";
-import { formatDate } from "@/lib/dates";
+import { formatDate, todayISO } from "@/lib/dates";
 
 export type TenantInput = {
   name: string;
@@ -154,16 +154,37 @@ export async function createTenant(db: DB, actorId: string, input: TenantInput &
   });
 }
 
-export async function updateTenant(db: DB, actorId: string, tenantId: string, input: TenantInput & { status: "active" | "notice" | "moved_out" }) {
+export type TenantUpdate = TenantInput & {
+  status: "active" | "notice" | "moved_out";
+  /** Required when status is moved_out. */
+  moveOutDate?: string | null;
+  /** undefined = leave the bed alone, "" / null = no bed. Ignored for vacated tenants. */
+  bedId?: string | null;
+  /** Optional: a new temporary password. */
+  password?: string | null;
+  photo?: ValidFile | null;
+  idProof?: { file: ValidFile; idType?: string | null } | null;
+};
+
+export async function updateTenant(db: DB, actorId: string, tenantId: string, input: TenantUpdate) {
+  const pw = input.password?.trim() ? input.password : null;
+  if (pw) {
+    const problem = passwordProblem(pw);
+    if (problem) throw new AppError(problem, "password");
+  }
+  const passwordHash = pw ? await hashPassword(pw) : null;
   await db.transaction(async (tx) => {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
-    // A vacated tenant's details can still be corrected, but they stay vacated; nobody is vacated through this form.
-    if (input.status === "moved_out" && p.status !== "moved_out") throw new AppError("Use the Vacate action to vacate a tenant");
-    if (p.status === "moved_out") input = { ...input, status: "moved_out" };
     const email = input.email.trim().toLowerCase();
     const [dupe] = await tx.select({ id: users.id }).from(users).where(eq(users.email, email));
     if (dupe && dupe.id !== p.userId) throw new AppError("A user with this email already exists", "email");
+    const wasVacated = p.status === "moved_out";
+    const willVacate = input.status === "moved_out";
+    if (willVacate) {
+      if (!input.moveOutDate) throw new AppError("Enter the vacated date", "moveOutDate");
+      if (input.moveOutDate < input.joiningDate) throw new AppError("Vacated date is before the joining date", "moveOutDate");
+    }
     await tx.update(users).set({ name: input.name.trim(), email }).where(eq(users.id, p.userId));
     await tx
       .update(tenantProfiles)
@@ -176,19 +197,51 @@ export async function updateTenant(db: DB, actorId: string, tenantId: string, in
         emergencyContactName: input.emergencyContactName ?? null,
         emergencyContactPhone: input.emergencyContactPhone ?? null,
         notes: input.notes ?? null,
-        status: input.status,
       })
       .where(eq(tenantProfiles.id, tenantId));
-    await audit(tx, actorId, "tenant.update", "tenant", tenantId, { rent: input.monthlyRentPaise, status: input.status });
-    if (input.status === "notice" && p.status !== "notice") {
-      await notifyTenant(tx, tenantId, { type: "status_notice", title: "You are on notice period", body: "The PG owner has marked your stay as notice period. Please contact them for details.", href: "/portal/profile" });
-      await notifyAdmins(tx, { type: "status_notice", title: `${input.name.trim()} is on notice period`, body: "Marked by another admin.", href: `/admin/tenants/${tenantId}` }, actorId);
+
+    // status: active / notice / vacated
+    if (wasVacated && !willVacate) {
+      await revertVacateTx(tx, actorId, tenantId);
+    } else if (!wasVacated && willVacate) {
+      await vacateTenantTx(tx, actorId, tenantId, input.moveOutDate!);
+    } else if (wasVacated && willVacate && input.moveOutDate !== p.moveOutDate) {
+      // only the vacated date was corrected: move the end of their last stay with it
+      await tx.update(bedAssignments).set({ endDate: input.moveOutDate }).where(and(eq(bedAssignments.tenantId, tenantId), eq(bedAssignments.endDate, p.moveOutDate!)));
+      await tx.update(tenantProfiles).set({ moveOutDate: input.moveOutDate }).where(eq(tenantProfiles.id, tenantId));
     }
+    if (!willVacate) {
+      await tx.update(tenantProfiles).set({ status: input.status }).where(eq(tenantProfiles.id, tenantId));
+      if (input.status === "notice" && p.status !== "notice") {
+        await notifyTenant(tx, tenantId, { type: "status_notice", title: "You are on notice period", body: "The PG owner has marked your stay as notice period. Please contact them for details.", href: "/portal/profile" });
+        await notifyAdmins(tx, { type: "status_notice", title: `${input.name.trim()} is on notice period`, body: "Marked by another admin.", href: `/admin/tenants/${tenantId}` }, actorId);
+      }
+      if (input.bedId !== undefined) {
+        const wanted = input.bedId || null;
+        const [cur] = await tx.select().from(bedAssignments).where(and(eq(bedAssignments.tenantId, tenantId), isNull(bedAssignments.endDate)));
+        if ((cur?.bedId ?? null) !== wanted) {
+          const today = todayISO();
+          await moveTenantToBedTx(tx, actorId, tenantId, wanted, cur && today < cur.startDate ? cur.startDate : today);
+        }
+      }
+    }
+    if (passwordHash) {
+      await tx.update(users).set({ passwordHash, mustChangePassword: true }).where(eq(users.id, p.userId));
+      await tx.delete(sessions).where(eq(sessions.userId, p.userId));
+      await audit(tx, actorId, "tenant.password_reset", "tenant", tenantId);
+    }
+    if (input.photo) await saveDocumentTx(tx, actorId, tenantId, "photo", input.photo);
+    if (input.idProof) await saveDocumentTx(tx, actorId, tenantId, "id_proof", input.idProof.file, input.idProof.idType);
+    await audit(tx, actorId, "tenant.update", "tenant", tenantId, { rent: input.monthlyRentPaise, status: input.status });
   });
 }
 
 export async function moveTenantToBed(db: DB, actorId: string, tenantId: string, bedId: string | null, date: string) {
-  await db.transaction(async (tx) => {
+  await db.transaction(async (tx) => moveTenantToBedTx(tx, actorId, tenantId, bedId, date));
+}
+
+async function moveTenantToBedTx(tx: Q, actorId: string, tenantId: string, bedId: string | null, date: string) {
+  {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p || p.status === "moved_out") throw new AppError("Tenant not found or has vacated");
     await tx
@@ -197,12 +250,16 @@ export async function moveTenantToBed(db: DB, actorId: string, tenantId: string,
       .where(and(eq(bedAssignments.tenantId, tenantId), isNull(bedAssignments.endDate)));
     if (bedId) await assignBedTx(tx, tenantId, bedId, date);
     await audit(tx, actorId, bedId ? "bed.assign" : "bed.unassign", "tenant", tenantId, { bedId, date });
-  });
+  }
 }
 
 /** Ends the bed assignment and marks the tenant vacated. Invoices and payments are untouched. */
 export async function vacateTenant(db: DB, actorId: string, tenantId: string, date: string) {
-  await db.transaction(async (tx) => {
+  await db.transaction(async (tx) => vacateTenantTx(tx, actorId, tenantId, date));
+}
+
+async function vacateTenantTx(tx: Q, actorId: string, tenantId: string, date: string) {
+  {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
     if (p.status === "moved_out") throw new AppError("Already vacated");
@@ -212,7 +269,7 @@ export async function vacateTenant(db: DB, actorId: string, tenantId: string, da
     await audit(tx, actorId, "tenant.move_out", "tenant", tenantId, { date });
     await notifyTenant(tx, tenantId, { type: "vacated", title: "Your stay has ended", body: `You are marked as vacated on ${formatDate(date)}. Your invoices and receipts stay available here.`, href: "/portal/rent" });
     await notifyAdmins(tx, { type: "vacated", title: "A tenant has vacated", body: `Vacate date ${formatDate(date)}.`, href: `/admin/tenants/${tenantId}` }, actorId);
-  });
+  }
 }
 
 /**
@@ -220,7 +277,11 @@ export async function vacateTenant(db: DB, actorId: string, tenantId: string, da
  * Their old bed is given back if nobody else has it now; otherwise they have no bed until you assign one.
  */
 export async function revertVacate(db: DB, actorId: string, tenantId: string) {
-  return db.transaction(async (tx) => {
+  return db.transaction(async (tx) => revertVacateTx(tx, actorId, tenantId));
+}
+
+async function revertVacateTx(tx: Q, actorId: string, tenantId: string) {
+  {
     const [p] = await tx.select().from(tenantProfiles).where(eq(tenantProfiles.id, tenantId));
     if (!p) throw new AppError("Tenant not found");
     if (p.status !== "moved_out") throw new AppError("This tenant has not vacated");
@@ -239,7 +300,7 @@ export async function revertVacate(db: DB, actorId: string, tenantId: string) {
     await audit(tx, actorId, "tenant.revert_vacate", "tenant", tenantId, { bedBack });
     await notifyTenant(tx, tenantId, { type: "status_active", title: "Your stay is active again", body: "The PG owner has reopened your stay.", href: "/portal" });
     return { bedBack };
-  });
+  }
 }
 
 export async function setTenantLoginActive(db: DB, actorId: string, tenantId: string, active: boolean) {

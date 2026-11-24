@@ -5,10 +5,10 @@ import { ChoiceChips, METHOD_CHOICES } from "@/components/choice-chips";
 import { monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 
-export type UnpaidItem = { key: string; label: string; amount: number; month: string; kind: "rent" | "expense" };
+export type UnpaidItem = { invoiceId: string; amount: number; month: string };
 
 /**
- * "Mark paid" for one tenant: opens a small box listing everything still unpaid (rent and each expense on its own, oldest first),
+ * "Mark paid" for one tenant: opens a small box listing everything still unpaid (one line per month, oldest first),
  * all ticked. Untick what was not paid, choose UPI or Cash, confirm. Shows nothing when the tenant owes nothing.
  */
 export function MarkPaidButton({ name, items, iconOnly }: { name: string; items: UnpaidItem[]; /** Compact icon button (for table rows). */ iconOnly?: boolean }) {
@@ -26,11 +26,11 @@ export function MarkPaidButton({ name, items, iconOnly }: { name: string; items:
         <div className="mt-3">
           <ul className="max-h-56 divide-y divide-line overflow-y-auto rounded-lg border border-line">
             {items.map((i) => (
-              <li key={i.key}>
+              <li key={i.invoiceId}>
                 <label className="flex cursor-pointer items-center gap-3 px-3 py-2">
-                  <input type="checkbox" name="pick" value={i.key} defaultChecked className="size-4 shrink-0 accent-teal-700" />
+                  <input type="checkbox" name="pick" value={i.invoiceId} defaultChecked className="size-4 shrink-0 accent-teal-700" />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium">{i.label}</span>
+                    <span className="block text-sm font-medium">Rent</span>
                     <span className="block text-xs text-muted">{monthLabel(i.month)}</span>
                   </span>
                   <span className="text-sm font-medium tabular-nums">{formatINR(i.amount)}</span>

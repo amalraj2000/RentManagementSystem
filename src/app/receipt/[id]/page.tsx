@@ -6,11 +6,9 @@ import { getDb } from "@/db/client";
 import { invoices, payments, tenantProfiles, users } from "@/db/schema";
 import { formatDate, monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
-import { purposeLabel } from "@/lib/billing";
 import { methodLabel } from "@/lib/payment-methods";
 import { requireUser } from "@/lib/session";
 import { tenantForUser } from "@/services/portal";
-import { invoiceBuckets } from "@/services/billing";
 
 export const metadata = { title: "Receipt" };
 export const dynamic = "force-dynamic";
@@ -20,7 +18,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
   const { id } = await params;
   const db = getDb();
   const [r] = await db
-    .select({ p: payments, name: users.name, month: invoices.periodMonth })
+    .select({ p: payments, name: users.name, month: invoices.periodMonth, total: invoices.totalPaise, paid: invoices.paidPaise })
     .from(payments)
     .innerJoin(invoices, eq(invoices.id, payments.invoiceId))
     .innerJoin(tenantProfiles, eq(tenantProfiles.id, payments.tenantId))
@@ -32,8 +30,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
     const me = await tenantForUser(db, user.id);
     if (!me || me.id !== r.p.tenantId) notFound();
   }
-  const b = await invoiceBuckets(db, r.p.invoiceId);
-  const left = r.p.purpose === "rent" ? b.rentBalance : b.expenseBalance; // only what is left of THIS (rent or expenses), never both added
+  const left = r.total - r.paid;
   return (
     <main className="mx-auto max-w-md p-4 sm:p-8">
       <div className="rounded-xl border border-line bg-white p-6">
@@ -44,7 +41,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
         <dl className="mt-5 space-y-2 text-sm">
           {[
             ["Received from", r.name],
-            ["For", `${purposeLabel(r.p.purpose)} – ${monthLabel(r.month)}`],
+            ["For", `Rent – ${monthLabel(r.month)}`],
             ["Date", formatDate(r.p.paidOn)],
             ["Method", methodLabel(r.p.method) + (r.p.reference ? ` (${r.p.reference})` : "")],
           ].map(([k, v]) => <div key={k} className="flex justify-between gap-4"><dt className="text-muted">{k}</dt><dd className="text-right font-medium capitalize">{v}</dd></div>)}
@@ -53,7 +50,7 @@ export default async function Receipt({ params }: { params: Promise<{ id: string
           <span className="text-sm text-muted">Amount received</span>
           <span className="text-2xl font-semibold tabular-nums">{formatINR(r.p.amountPaise)}</span>
         </div>
-        <p className="mt-2 text-right text-xs text-muted">{purposeLabel(r.p.purpose)} still unpaid on this bill: {formatINR(Math.max(left, 0))}</p>
+        <p className="mt-2 text-right text-xs text-muted">Still unpaid on this bill: {formatINR(Math.max(left, 0))}</p>
         <p className="mt-6 text-xs text-muted">Recorded manually by the PG owner. This is an acknowledgement of payment received.</p>
       </div>
     </main>

@@ -21,12 +21,12 @@ export async function reportPaymentAction(invoiceId: string, f: FormData) {
   return run(async () => {
     const me = await requireTenantWrite();
     const d = z
-      .object({ purpose: z.enum(["rent", "expense"]).default("rent"), itemId: z.string().trim().optional().transform((v) => v || undefined).pipe(S.id.optional()), amount: S.positiveMoney, paidOn: S.date, method: z.enum(["upi", "cash"]), reference: S.optText(100), note: S.optText(200) })
+      .object({ amount: S.positiveMoney, paidOn: S.date, method: z.enum(["upi", "cash"]), reference: S.optText(100), note: S.optText(200) })
       .parse(fd(f));
     const shot = fileOf(f, "screenshot");
     const screenshot = shot ? await validateFile(shot, "photo", "screenshot") : null; // images only
     if (d.method === "upi" && !screenshot) throw new AppError("Upload the screenshot of your UPI payment", "screenshot"); // UPI payments are proved by the screenshot
-    await createClaim(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), purpose: d.purpose, invoiceItemId: d.itemId, amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note, screenshot });
+    await createClaim(getDb(), me.id, { invoiceId: S.id.parse(invoiceId), amountPaise: d.amount, paidOn: d.paidOn, method: d.method, reference: d.reference, note: d.note, screenshot });
     revalidatePath("/portal", "layout");
     revalidatePath("/admin", "layout");
     return "Sent! The owner will confirm your payment soon.";

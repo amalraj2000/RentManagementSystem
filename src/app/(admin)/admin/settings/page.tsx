@@ -1,6 +1,6 @@
 import { ActionForm } from "@/components/action-form";
 import { SettingsTabs } from "@/components/settings-tabs";
-import { Card, Field, Input, PageHeader, Select, Textarea } from "@/components/ui";
+import { Card, Field, Input, PageHeader, Textarea } from "@/components/ui";
 import { updateSettingsAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
 import { paiseToInput } from "@/lib/money";
@@ -19,14 +19,6 @@ export default async function SettingsPage() {
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Default monthly rent (₹)" hint="Pre-filled for new tenants. Each tenant has their own rent."><Input name="defaultRent" inputMode="decimal" required defaultValue={paiseToInput(s.defaultRentPaise)} /></Field>
             <Field label="Rent due day of month" hint="1–28. Applies to newly generated invoices."><Input name="dueDay" type="number" min={1} max={28} required defaultValue={s.dueDayOfMonth} /></Field>
-            <Field label="Default electricity split">
-              <Select name="electricityMethod" defaultValue={s.electricityMethod}>
-                <option value="equal_residents">Equal – eligible residents</option><option value="equal_beds">Equal – occupied beds</option><option value="custom">Custom per tenant</option>
-              </Select>
-            </Field>
-            <Field label="Default water split">
-              <Select name="waterMethod" defaultValue={s.waterMethod}><option value="equal_residents">Equal – eligible residents</option><option value="custom">Custom per tenant</option></Select>
-            </Field>
           </div>
           <div className="grid gap-3 border-t border-line pt-4 sm:grid-cols-2">
             <Field label="UPI id (for tenants to pay)" hint="Like name@okbank. Tenants see it, and a Pay button, when they choose UPI."><Input name="upiId" maxLength={100} placeholder="name@bank" autoComplete="off" defaultValue={s.upiId} /></Field>

@@ -99,6 +99,13 @@
       "when": 1795445542259,
       "tag": "0013_dob_and_upi",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1795518276943,
+      "tag": "0014_remove_expenses",
+      "breakpoints": true
     }
   ]
 }
