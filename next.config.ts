@@ -13,7 +13,10 @@ const nextConfig: NextConfig = {
   experimental: { serverActions: { bodySizeLimit: "4mb" } },
   serverExternalPackages: ["@node-rs/argon2", "@libsql/client"],
   async headers() {
-    return [{ source: "/(.*)", headers: securityHeaders }];
+    return [
+      { source: "/(.*)", headers: securityHeaders },
+      { source: "/sw.js", headers: [{ key: "Cache-Control", value: "no-cache, no-store, must-revalidate" }, { key: "Content-Type", value: "application/javascript; charset=utf-8" }] },
+    ];
   },
 };
 

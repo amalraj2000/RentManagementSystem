@@ -1,15 +1,17 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
+import { SwRegister } from "@/components/sw-register";
 import "./globals.css";
 
-export const metadata: Metadata = { title: { default: "Loveshore", template: "%s · Loveshore" }, description: "Loveshore — ladies' PG: rent, bills and notices", robots: { index: false, follow: false } };
-export const viewport: Viewport = { themeColor: "#0f766e", width: "device-width", initialScale: 1 };
+export const metadata: Metadata = { title: { default: "Loveshore", template: "%s · Loveshore" }, description: "Loveshore — ladies' PG: rent, bills and notices", robots: { index: false, follow: false }, applicationName: "Loveshore", appleWebApp: { capable: true, title: "Loveshore", statusBarStyle: "default" }, icons: { apple: "/apple-icon.png" }, formatDetection: { telephone: false } };
+export const viewport: Viewport = { themeColor: "#0f766e", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en-IN">
       <body>
         {children}
+        <SwRegister />
         {/* Same look as the rest of the app: white card, thin border, a coloured edge for success / error. */}
         <Toaster
           position="top-center"
