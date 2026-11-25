@@ -93,7 +93,15 @@ A bell with an unread count sits in the sidebar / mobile header for both roles, 
 - **Admin** gets: tenant overdue, payment recorded or voided by *another* admin, tenant put on notice / vacated by another admin, new admin added.
 - Event notifications are created in the same transaction as the action; every notification has a dedupe key so nothing is sent twice. Read notifications older than 90 days are pruned.
 - **Due/overdue reminders** run from a daily Vercel Cron (`vercel.json` → `/api/cron/reminders`, 03:30 UTC ≈ 09:00 IST). Set `CRON_SECRET` in Vercel (any long random string); the endpoint returns 401/503 without it. As a fallback the app also runs the same idempotent job once a day after a logged-in page view.
-- Email / SMS / push are **not** included (they need a provider account); the notification table is the single place to hook them in later.
+- Email / SMS are **not** included (they need a provider account). Push alerts are described under *Installed app (PWA)*; every notification created by `notifyUsers` also goes out as a push.
+
+## Installed app (PWA)
+For the home-screen app on iPhone and Android only — the extras below never show in a normal browser tab or on desktop.
+- **Look & feel**: manifest (+ maskable icon), iOS meta tags and 19 launch images in `public/splash/` (regenerate with `npx tsx scripts/generate-splash.ts`; sizes live in `src/lib/splash-sizes.ts`), standalone-only CSS in `globals.css`, fade-in on page change (`app/template.tsx`).
+- **Offline** (`public/sw.js`, bump `VERSION` to drop old caches): `/` and `/login` are network-first with a 40-entry cache; static files and images are cache-first. Account, admin, receipt and `/api/*` pages are never cached — offline they show `/offline.html` with Retry. A top banner shows while offline.
+- **Updates**: a new service worker waits; the app shows "A new version is available → Refresh" (posts `SKIP_WAITING`, reloads on `controllerchange`). Checked every 30 min and when the app becomes visible.
+- **Push**: `src/services/push.ts` (`sendPush` never throws, 8 s timeout, removes 404/410 subscriptions). Routes: `GET /api/push/key`, `POST|DELETE /api/push/subscribe`. After login the installed app offers a "Get updates" prompt ("Not now" is remembered 7 days); logout removes the device's subscription. Not offered while an admin is viewing as a tenant. Table `push_subscriptions` (migration `0016`).
+- **Setup**: run `npx web-push generate-vapid-keys` **once** and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (e.g. `mailto:you@example.com`) on the host, then `npm run db:migrate`. Without them push is a silent no-op. iOS needs **iOS 16.4+ and the app added to the Home Screen**.
 
 ## Scripts
 `npm run dev | build | start | lint | typecheck | test | db:generate | db:migrate | admin:create | db:seed`

@@ -1,4 +1,5 @@
 import { Bell, CalendarDays, CreditCard, Home, Receipt } from "lucide-react";
+import { PushPrompt } from "@/components/push-prompt";
 import { AppShell } from "@/components/nav";
 import { Eye } from "lucide-react";
 import { UserMenu } from "@/components/user-menu";
@@ -34,6 +35,7 @@ export default async function PortalLayout({ children }: { children: React.React
       )}
       {user.mustChangePassword && !user.impersonatedBy && <ForceBanner />}
       {children}
+      {!user.impersonatedBy && <PushPrompt />}
     </AppShell>
   );
 }

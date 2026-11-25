@@ -1,4 +1,5 @@
 import { Bell, BedDouble, CreditCard, Receipt, LayoutDashboard, Settings, Users } from "lucide-react";
+import { PushPrompt } from "@/components/push-prompt";
 import { AppShell } from "@/components/nav";
 import { UserMenu } from "@/components/user-menu";
 import { logout } from "@/actions/auth";
@@ -27,6 +28,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <AppShell items={menu} bell={<NotificationBell userId={user.id} href="/admin/notifications" />} userMenu={<UserMenu name={user.name} email={user.email} roleLabel="Administrator" photoSrc={photoVersion ? `/api/avatars/${user.id}?v=${photoVersion}` : null} profileHref="/admin/profile" logoutAction={logout} />}>
       {children}
+      {!user.impersonatedBy && <PushPrompt />}
     </AppShell>
   );
 }

@@ -11,7 +11,7 @@ const securityHeaders = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   experimental: { serverActions: { bodySizeLimit: "4mb" } },
-  serverExternalPackages: ["@node-rs/argon2", "@libsql/client"],
+  serverExternalPackages: ["@node-rs/argon2", "@libsql/client", "web-push"],
   async headers() {
     return [
       { source: "/(.*)", headers: securityHeaders },

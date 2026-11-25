@@ -1,9 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
+import { SPLASH_SIZES, splashMedia, splashUrl } from "@/lib/splash-sizes";
 import { SwRegister } from "@/components/sw-register";
 import "./globals.css";
 
-export const metadata: Metadata = { title: { default: "Loveshore", template: "%s · Loveshore" }, description: "Loveshore — ladies' PG: rent, bills and notices", robots: { index: false, follow: false }, applicationName: "Loveshore", appleWebApp: { capable: true, title: "Loveshore", statusBarStyle: "default" }, icons: { apple: "/apple-icon.png" }, formatDetection: { telephone: false } };
+export const metadata: Metadata = { title: { default: "Loveshore", template: "%s · Loveshore" }, description: "Loveshore — ladies' PG: rent, bills and notices", robots: { index: false, follow: false }, applicationName: "Loveshore", appleWebApp: { capable: true, title: "Loveshore", statusBarStyle: "default", startupImage: SPLASH_SIZES.map(([w, h, r]) => ({ url: splashUrl(w, h), media: splashMedia(w, h, r) })) }, icons: { apple: "/apple-icon.png" }, formatDetection: { telephone: false } };
 export const viewport: Viewport = { themeColor: "#0f766e", width: "device-width", initialScale: 1, viewportFit: "cover" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

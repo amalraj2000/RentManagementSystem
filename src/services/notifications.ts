@@ -5,6 +5,7 @@ import { invoiceBalances } from "./reports";
 import { formatDate, monthLabel } from "@/lib/dates";
 import { formatINR } from "@/lib/money";
 import type { Q } from "./common";
+import { queuePush } from "./push";
 
 export type NotificationInput = { type: string; title: string; body: string; href?: string | null; dedupeKey?: string | null };
 
@@ -12,10 +13,12 @@ export type NotificationInput = { type: string; title: string; body: string; hre
 export async function notifyUsers(q: Q, userIds: string[], n: NotificationInput) {
   const ids = [...new Set(userIds)];
   if (!ids.length) return;
-  await q
+  const made = await q
     .insert(notifications)
     .values(ids.map((userId) => ({ userId, type: n.type, title: n.title, body: n.body, href: n.href ?? null, dedupeKey: n.dedupeKey ?? null })))
-    .onConflictDoNothing();
+    .onConflictDoNothing()
+    .returning({ userId: notifications.userId });
+  queuePush(made.map((r) => r.userId), { title: n.title, body: n.body, url: n.href }); // only newly created rows, so repeats never re-push
 }
 
 export async function adminIds(q: Q, except?: string | null | (string | null)[]) {

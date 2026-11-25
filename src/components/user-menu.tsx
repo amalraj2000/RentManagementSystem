@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, LogOut, Settings } from "lucide-react";
 import { Avatar } from "@/components/avatar";
+import { unsubscribePush } from "@/lib/pwa-client";
 
 /** Header profile menu: avatar + name, with "Profile settings" and "Logout". Closes on outside click / Esc. */
 export function UserMenu({ name, email, roleLabel, photoId, photoSrc, profileHref, logoutAction }: { name: string; email: string; roleLabel: string; photoId?: string | null; photoSrc?: string | null; profileHref: string; logoutAction: () => Promise<void> }) {
@@ -39,7 +40,7 @@ export function UserMenu({ name, email, roleLabel, photoId, photoSrc, profileHre
               <Settings className="size-4 text-muted" aria-hidden /> Profile settings
             </Link>
             <form action={logoutAction}>
-              <button role="menuitem" className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50">
+              <button role="menuitem" onClick={() => void unsubscribePush()} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-700 hover:bg-red-50">
                 <LogOut className="size-4" aria-hidden /> Logout
               </button>
             </form>

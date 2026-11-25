@@ -388,3 +388,17 @@ export const auditLogs = sqliteTable(
 export type User = typeof users.$inferSelect;
 export type TenantProfile = typeof tenantProfiles.$inferSelect;
 export type Invoice = typeof invoices.$inferSelect;
+
+/** Web-push subscriptions (one per browser/device). `endpoint` is unique, so a device re-subscribing under another login moves to that user. */
+export const pushSubscriptions = sqliteTable(
+  "push_subscriptions",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    p256dh: text("p256dh").notNull(),
+    auth: text("auth").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("push_endpoint_uq").on(t.endpoint), index("push_user_idx").on(t.userId)],
+);

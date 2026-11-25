@@ -115,3 +115,21 @@
   .house-scene *, .house-scene .dog-tail, .house-scene .dog-head { animation: none !important; }
   .hs-smoke { opacity: 0.5; }
 }
+
+/* ---- Page change fade (all modes; skipped for reduced motion) ---- */
+@keyframes page-fade { from { opacity: 0; } to { opacity: 1; } }
+.page-fade { animation: page-fade 0.18s ease-out; }
+@media (prefers-reduced-motion: reduce) { .page-fade { animation: none; } }
+
+/* ---- Installed app (home-screen) polish ---- */
+@media (display-mode: standalone) {
+  html, body { overscroll-behavior: none; }
+  body {
+    -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  input, textarea, select, [contenteditable] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
+  a, button, [role="button"] { transition: transform 0.12s ease-out; }
+  a:active, button:active, [role="button"]:active { transform: scale(0.97); }
+  @media (prefers-reduced-motion: reduce) { a, button, [role="button"] { transition: none; } a:active, button:active, [role="button"]:active { transform: none; } }
+}
