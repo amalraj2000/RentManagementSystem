@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { Eye, ImageIcon, Plus } from "lucide-react";
+import { redirect } from "next/navigation";
+import { Eye, ImageIcon } from "lucide-react";
 import { ConfirmButton } from "@/components/action-form";
-import { Badge, buttonClass, EditLink, iconButtonClass, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
+import { Badge, EditLink, iconButtonClass, Empty, PageHeader, Pager, RowActions, Table, Td, Th } from "@/components/ui";
 import { approveClaimAction, rejectClaimAction, voidPaymentAction } from "@/actions/admin";
 import { Field, Input } from "@/components/ui";
 import { getDb } from "@/db/client";
-import { formatDate, monthLabel } from "@/lib/dates";
+import { currentMonth, formatDate, monthLabel } from "@/lib/dates";
 import { formatINR, paiseToInput } from "@/lib/money";
 import { methodLabel } from "@/lib/payment-methods";
 import { pageParam, slicePage } from "@/lib/page";
@@ -20,7 +21,8 @@ const TAB_LABEL: Record<ActivityFilter, string> = { all: "All payments", waiting
 export default async function PaymentsPage({ searchParams }: { searchParams: Promise<{ page?: string; show?: string }> }) {
   await requireAdmin();
   const sp = await searchParams;
-  const board = !sp.show || sp.show === "months"; // the default view: the list of months
+  if (!sp.show) redirect(`/admin/payments/month/${currentMonth()}`); // Rent always opens on the current month
+  const board = sp.show === "months"; // the default view: the list of months
   const show: ActivityFilter = sp.show === "cancelled" ? "cancelled" : "all";
   const all = await paymentActivity(getDb());
   const counts = filterCounts(all);
@@ -32,26 +34,20 @@ export default async function PaymentsPage({ searchParams }: { searchParams: Pro
       <PageHeader
         title="Rent"
         description={board ? "Pick a month to see who has paid." : "Payments you recorded and payments tenants say they made — all in one place."}
-        actions={<><Link href="/admin/payments/new" className={buttonClass()}><Plus className="size-4" aria-hidden /> Record payment</Link></>}
       />
       <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="Rent views">
-        <Link href="/admin/payments" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Months</Link>
-        {(["cancelled"] as ActivityFilter[]).map((f) => (
-          <Link key={f} href={tabHref(f)} role="tab" aria-selected={!board && show === f} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${!board && show === f ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>
-            {TAB_LABEL[f]}
-            <span className={`rounded-full px-1.5 text-[11px] font-semibold ${f === "waiting" && counts.waiting > 0 ? "bg-red-600 text-white" : "bg-slate-100 text-slate-600"}`}>{counts[f]}</span>
-          </Link>
-        ))}
+        <Link href="/admin/payments?show=months" role="tab" aria-selected={board} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${board ? "bg-accent-soft text-accent" : "text-slate-600 hover:bg-slate-100"}`}>Months</Link>
       </div>
       {board ? (
         monthRows.length === 0 ? <Empty>No months yet.</Empty> : (
           <Table>
-            <thead><tr><Th>Month</Th><Th>Paid</Th><Th className="text-right">Collected</Th><Th>Waiting</Th><Th className="text-right">Action</Th></tr></thead>
+            <thead><tr><Th>Month</Th><Th>Paid</Th><Th>Status</Th><Th className="text-right">Collected</Th><Th>Waiting</Th><Th className="text-right">Action</Th></tr></thead>
             <tbody>
               {monthRows.map((m) => (
                 <tr key={m.month}>
                   <Td><Link className="font-medium hover:underline" href={`/admin/payments/month/${m.month}`}>{monthLabel(m.month)}</Link></Td>
                   <Td>{m.bills === 0 ? <span className="text-muted">No bills yet</span> : `${m.paidBills} of ${m.bills} paid`}</Td>
+                  <Td>{m.bills === 0 ? <Badge kind="not_billed" /> : m.paidBills >= m.bills ? <Badge kind="paid" /> : <Badge kind="due" />}</Td>
                   <Td className="text-right tabular-nums">{formatINR(m.collected)}</Td>
                   <Td>{m.waiting > 0 ? <span className="rounded-full bg-red-600 px-2 py-0.5 text-xs font-semibold text-white">{m.waiting}</span> : <span className="text-muted">—</span>}</Td>
                   <Td><RowActions><Link href={`/admin/payments/month/${m.month}`} title="View month" aria-label="View month" className={iconButtonClass()}><Eye className="size-4" aria-hidden /></Link></RowActions></Td>

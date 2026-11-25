@@ -48,7 +48,7 @@ export function LoginModal() {
         // keep the address tidy once the pop-up is closed
         if (new URL(window.location.href).searchParams.has("login")) window.history.replaceState(null, "", window.location.pathname);
       }}
-      onClick={(e) => e.target === ref.current && ref.current?.close()} // click on the dimmed background closes it
+      onCancel={(e) => e.preventDefault()} // Esc does not close it; only the X button does
       className="m-auto w-[min(24rem,92vw)] rounded-2xl border border-line bg-white p-0 text-left shadow-2xl backdrop:bg-slate-900/50"
     >
       <div className="relative p-6">

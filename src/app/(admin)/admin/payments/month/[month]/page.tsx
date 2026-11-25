@@ -8,9 +8,10 @@ import { RevertPaidButton } from "@/components/revert-paid-button";
 import { Badge, Empty, Field, Input, PageHeader, RowActions, Table, Td, Th, iconButtonClass } from "@/components/ui";
 import { approveClaimAction, rejectClaimAction } from "@/actions/admin";
 import { getDb } from "@/db/client";
-import { MONTH_RE, monthLabel, todayISO } from "@/lib/dates";
+import { MONTH_RE, addMonths, currentMonth, monthLabel, todayISO } from "@/lib/dates";
 import { formatINR, paiseToInput } from "@/lib/money";
 import { requireAdmin } from "@/lib/session";
+import { syncInvoices } from "@/services/billing";
 import { paymentActivity } from "@/services/payment-activity";
 import { paymentBoard, paymentsByTenant, unpaidItemsByTenant } from "@/services/reports";
 
@@ -22,14 +23,23 @@ export default async function PaymentsMonth({ params }: { params: Promise<{ mont
   const { month } = await params;
   if (!MONTH_RE.test(month)) notFound();
   const db = getDb();
+  const now = currentMonth();
+  if (month === now) await syncInvoices(db, null, month); // the current month always has a bill for every active tenant (idempotent)
   const tenants = await paymentBoard(db, month, todayISO());
   const ids = tenants.map((t) => t.tenantId);
   const [all, unpaid, paid] = await Promise.all([paymentActivity(db), unpaidItemsByTenant(db, ids), paymentsByTenant(db, ids, 200)]);
   const waiting = all.filter((r) => r.status === "waiting" && r.month === month);
   return (
     <>
-      <BackLink href="/admin/payments" label="Rent" />
-      <PageHeader title={monthLabel(month)} description="Active tenants and whether their rent is paid for this month." />
+      <BackLink href="/admin/payments?show=months" label="All months" />
+      <PageHeader
+        title={monthLabel(month)}
+        description="Active tenants and whether their rent is paid for this month."
+        actions={<>
+          <Link href={`/admin/payments/month/${addMonths(month, -1)}`} className="text-sm font-medium text-accent hover:underline">← {monthLabel(addMonths(month, -1))}</Link>
+          {month < now && <Link href={`/admin/payments/month/${addMonths(month, 1)}`} className="text-sm font-medium text-accent hover:underline">{monthLabel(addMonths(month, 1))} →</Link>}
+        </>}
+      />
       {tenants.length === 0 ? <Empty>No active tenants yet.</Empty> : (
         <Table>
           <thead><tr><Th>Tenant</Th><Th>Status</Th><Th className="text-right">Action</Th></tr></thead>
